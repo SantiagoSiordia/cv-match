@@ -1,24 +1,21 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+**CV Match** — match résumés to job descriptions with [Google Gemini](https://ai.google.dev/). See [PRD.md](./PRD.md) for product scope.
+
+This is a [Next.js](https://nextjs.org) app (TypeScript, App Router, Tailwind).
 
 ## Getting Started
 
-First, run the development server:
+Copy [`.env.example`](./.env.example) to `.env` and set `GEMINI_API_KEY`.
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Local data (not in git)
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Uploads and runs live under `cvs-pdf/`, `cvs-extracted/`, `cvs-meta/`, `job-descriptions/`, and `evaluations/`. Those paths are **gitignored**; only `.gitkeep` placeholders are tracked. Use the UI or `npm run ingest:*` / `npm run migrate:cvs-layout` locally as needed.
 
 ## Learn More
 
