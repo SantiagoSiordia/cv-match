@@ -1,0 +1,19 @@
+# Local "production-like" run: same image as AWS, data in ./.local-data
+#
+#   cp .env.example .env   # set AWS_REGION + credentials or use override for ~/.aws
+#   npm run local:docker
+#
+# Open http://localhost:3000
+
+services:
+  cv-match:
+    build: .
+    ports:
+      # Use HOST_PORT=3001 if 3000 is already taken (e.g. npm run dev)
+      - "${HOST_PORT:-3000}:3000"
+    env_file:
+      - .env
+    environment:
+      CV_MATCH_DATA_ROOT: /data
+    volumes:
+      - ./.local-data:/data

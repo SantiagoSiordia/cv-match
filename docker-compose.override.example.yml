@@ -1,0 +1,17 @@
+# Optional: copy to docker-compose.override.yml to use the AWS CLI profile on your Mac
+# (including SSO after `aws sso login`). The service runs as root only in this override
+# so the SDK can read /root/.aws — for local development convenience.
+#
+#   cp docker-compose.override.example.yml docker-compose.override.yml
+#   export AWS_PROFILE=your-profile   # if not default
+#   npm run local:docker
+#
+# Do not commit docker-compose.override.yml if it references personal paths.
+
+services:
+  cv-match:
+    user: root
+    environment:
+      AWS_PROFILE: ${AWS_PROFILE:-default}
+    volumes:
+      - ${HOME}/.aws:/root/.aws:ro
