@@ -19,7 +19,7 @@ export const metadata: Metadata = {
     template: "%s · CV Match",
   },
   description:
-    "Evaluate candidate CVs against job descriptions with Gemini-powered scoring.",
+    "Evaluate candidate CVs against job descriptions with Bedrock-powered scoring.",
 };
 
 export default function RootLayout({
