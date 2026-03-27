@@ -1,4 +1,7 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import {
+  BedrockRuntimeClient,
+  InvokeModelCommand,
+} from "@aws-sdk/client-bedrock-runtime";
 import {
   compatibilityResultSchema,
   cvGeminiMetaSchema,
@@ -6,38 +9,106 @@ import {
   type CompatibilityResult,
   type CvGeminiMeta,
 } from "@/lib/schemas";
-import { DEFAULT_GEMINI_MODEL } from "@/lib/constants";
+import {
+  DEFAULT_BEDROCK_TEXT_MODEL,
+} from "@/lib/constants";
 
-export class GeminiConfigError extends Error {
-  readonly code = "MISSING_API_KEY" as const;
-  constructor() {
-    super("GEMINI_API_KEY is not set");
-    this.name = "GeminiConfigError";
-  }
-}
-
-export class GeminiResponseError extends Error {
+export class BedrockConfigError extends Error {
+  readonly code = "MISSING_BEDROCK_CONFIG" as const;
   constructor(message: string) {
     super(message);
-    this.name = "GeminiResponseError";
+    this.name = "BedrockConfigError";
   }
 }
 
-function getGenerativeModel() {
-  const key = process.env.GEMINI_API_KEY?.trim();
-  if (!key) {
-    throw new GeminiConfigError();
+export class BedrockResponseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BedrockResponseError";
   }
-  const genAI = new GoogleGenerativeAI(key);
-  const model =
-    process.env.GEMINI_MODEL?.trim() || DEFAULT_GEMINI_MODEL;
-  return genAI.getGenerativeModel({
-    model,
-    generationConfig: {
-      responseMimeType: "application/json",
-      temperature: 0.25,
-    },
+}
+
+let cachedClient: BedrockRuntimeClient | null = null;
+let cachedRegion: string | null = null;
+
+function resolveRegion(): string {
+  return (
+    process.env.AWS_REGION?.trim() ||
+    process.env.AWS_DEFAULT_REGION?.trim() ||
+    ""
+  );
+}
+
+export function getBedrockRuntimeClient(): BedrockRuntimeClient {
+  const region = resolveRegion();
+  if (!region) {
+    throw new BedrockConfigError(
+      "Set AWS_REGION or AWS_DEFAULT_REGION for Amazon Bedrock.",
+    );
+  }
+  if (!cachedClient || cachedRegion !== region) {
+    cachedClient = new BedrockRuntimeClient({ region });
+    cachedRegion = region;
+  }
+  return cachedClient;
+}
+
+export function getTextModelId(): string {
+  return (
+    process.env.BEDROCK_TEXT_MODEL_ID?.trim() || DEFAULT_BEDROCK_TEXT_MODEL
+  );
+}
+
+async function invokeClaudeJson(prompt: string): Promise<string> {
+  const client = getBedrockRuntimeClient();
+  const modelId = getTextModelId();
+  const body = JSON.stringify({
+    anthropic_version: "bedrock-2023-05-31",
+    max_tokens: 8192,
+    temperature: 0.25,
+    messages: [
+      {
+        role: "user",
+        content: [{ type: "text", text: prompt }],
+      },
+    ],
   });
+
+  let responseBody: Uint8Array;
+  try {
+    const out = await client.send(
+      new InvokeModelCommand({
+        modelId,
+        contentType: "application/json",
+        accept: "application/json",
+        body: new TextEncoder().encode(body),
+      }),
+    );
+    responseBody = out.body as Uint8Array;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new BedrockResponseError(`Bedrock invocation failed: ${msg}`);
+  }
+
+  const raw = new TextDecoder().decode(responseBody);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    throw new BedrockResponseError("Bedrock returned non-JSON body");
+  }
+
+  const content = (
+    parsed as {
+      content?: Array<{ type?: string; text?: string }>;
+    }
+  ).content;
+  const textBlock = content?.find((c) => c.type === "text");
+  const text = textBlock?.text?.trim();
+  if (!text) {
+    throw new BedrockResponseError("Model returned no text content");
+  }
+  return text;
 }
 
 function stripJsonFence(raw: string): string {
@@ -52,14 +123,13 @@ export function parseJsonObject<T>(raw: string): T {
   try {
     return JSON.parse(inner) as T;
   } catch {
-    throw new GeminiResponseError("Model returned invalid JSON");
+    throw new BedrockResponseError("Model returned invalid JSON");
   }
 }
 
-export async function extractCvMetadataWithGemini(
+export async function extractCvMetadataWithBedrock(
   cvText: string,
 ): Promise<CvGeminiMeta> {
-  const model = getGenerativeModel();
   const prompt = `You extract structured data from a CV/resume text.
 
 Return ONLY JSON matching this shape:
@@ -77,17 +147,15 @@ ${truncateForPrompt(cvText, 24_000)}
 ---
 `;
 
-  const res = await model.generateContent(prompt);
-  const text = res.response.text();
+  const text = await invokeClaudeJson(prompt);
   const parsed = parseJsonObject<unknown>(text);
   return cvGeminiMetaSchema.parse(parsed);
 }
 
 /** Short professional title from résumé text only (for backfill when `title` was missing). */
-export async function guessCvTitleWithGemini(
+export async function guessCvTitleWithBedrock(
   cvText: string,
 ): Promise<string | null> {
-  const model = getGenerativeModel();
   const prompt = `From this résumé/CV text, infer the candidate's current or primary professional role as a short job title or headline only (2–8 words), e.g. "Software Engineer", "Senior Game Developer". Use what appears under their name or the most recent role if that's clearly their focus. Return null only if you cannot infer.
 
 Return ONLY JSON: {"title": string|null}
@@ -98,18 +166,16 @@ ${truncateForPrompt(cvText, 24_000)}
 ---
 `;
 
-  const res = await model.generateContent(prompt);
-  const text = res.response.text();
+  const text = await invokeClaudeJson(prompt);
   const parsed = parseJsonObject<{ title?: string | null }>(text);
   if (parsed.title === undefined || parsed.title === null) return null;
   const t = String(parsed.title).trim();
   return t.length ? t : null;
 }
 
-export async function guessJobTitleWithGemini(
+export async function guessJobTitleWithBedrock(
   jobText: string,
 ): Promise<string | null> {
-  const model = getGenerativeModel();
   const prompt = `From the job description text, infer a short job title (3-8 words) or null if unclear.
 
 Return ONLY JSON: {"title": string|null}
@@ -120,19 +186,17 @@ ${truncateForPrompt(jobText, 24_000)}
 ---
 `;
 
-  const res = await model.generateContent(prompt);
-  const text = res.response.text();
+  const text = await invokeClaudeJson(prompt);
   const parsed = parseJsonObject<{ title?: string | null }>(text);
   if (parsed.title === undefined || parsed.title === null) return null;
   const t = String(parsed.title).trim();
   return t.length ? t : null;
 }
 
-export async function evaluateCompatibilityWithGemini(
+export async function evaluateCompatibilityWithBedrock(
   jobDescriptionText: string,
   cvText: string,
 ): Promise<CompatibilityResult> {
-  const model = getGenerativeModel();
   const prompt = `You are an experienced hiring manager. Score how well the candidate fits the job.
 
 Return ONLY JSON with this exact shape:
@@ -163,8 +227,7 @@ ${truncateForPrompt(cvText, 24_000)}
 ---
 `;
 
-  const res = await model.generateContent(prompt);
-  const text = res.response.text();
+  const text = await invokeClaudeJson(prompt);
   const parsed = parseJsonObject<unknown>(text);
   return compatibilityResultSchema.parse(parsed);
 }
@@ -187,7 +250,6 @@ export async function generateTopMatchJustifications(
   const out = new Map<string, string>();
   if (matches.length === 0) return out;
 
-  const model = getGenerativeModel();
   const cvSlice = truncateForPrompt(cvText, 18_000);
   const blocks = matches.map((m, i) => {
     const jdSlice = truncateForPrompt(m.jdText, 10_000);
@@ -224,8 +286,7 @@ ${cvSlice}
 ${blocks.join("\n\n")}
 `;
 
-  const res = await model.generateContent(prompt);
-  const text = res.response.text();
+  const text = await invokeClaudeJson(prompt);
   const parsed = parseJsonObject<unknown>(text);
   const validated = topMatchJustificationsResponseSchema.parse(parsed);
   for (const row of validated.items) {

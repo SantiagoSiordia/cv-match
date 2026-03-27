@@ -63,6 +63,8 @@ export const jobStoredMetaSchema = z.object({
   lowTextWarning: z.boolean().optional(),
   titleGuess: z.string().nullable().optional(),
   geminiError: z.string().optional(),
+  /** Normalized concat for client search (file, title, body prefix, etc.). */
+  searchIndex: z.string().optional(),
 });
 
 export type JobStoredMeta = z.infer<typeof jobStoredMetaSchema>;

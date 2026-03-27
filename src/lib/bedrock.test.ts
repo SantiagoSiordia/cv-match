@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GeminiResponseError, parseJsonObject } from "@/lib/gemini";
+import { BedrockResponseError, parseJsonObject } from "@/lib/bedrock";
 
 describe("parseJsonObject", () => {
   it("parses raw JSON", () => {
@@ -12,6 +12,6 @@ describe("parseJsonObject", () => {
   });
 
   it("throws on invalid JSON", () => {
-    expect(() => parseJsonObject("{")).toThrow(GeminiResponseError);
+    expect(() => parseJsonObject("{")).toThrow(BedrockResponseError);
   });
 });

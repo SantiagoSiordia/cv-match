@@ -4,7 +4,7 @@
  *   npx tsx scripts/ingest-github-cv-dataset.ts
  *
  * Optional env:
- *   INGEST_CV_GEMINI=1  — run Gemini metadata per file (slow, many API calls)
+ *   INGEST_CV_AI=1  — run Bedrock metadata per file (slow, many API calls)
  *   INGEST_CONCURRENCY=4 — parallel downloads + PDF parse (default 3)
  *   INGEST_MAX_FILES=100 — cap for testing
  */
@@ -64,7 +64,9 @@ function rawUrl(filePath: string) {
 
 async function main() {
   loadDotEnv();
-  const skipGemini = process.env.INGEST_CV_GEMINI !== "1";
+  const skipAi =
+    process.env.INGEST_CV_AI !== "1" &&
+    process.env.INGEST_CV_GEMINI !== "1";
   const conc = Math.max(
     1,
     Math.min(12, Number(process.env.INGEST_CONCURRENCY) || 3),
@@ -73,8 +75,10 @@ async function main() {
     ? Number(process.env.INGEST_MAX_FILES)
     : Infinity;
 
-  if (skipGemini) {
-    console.log("Skipping Gemini (set INGEST_CV_GEMINI=1 to enable).");
+  if (skipAi) {
+    console.log(
+      "Skipping AI metadata (set INGEST_CV_AI=1 or legacy INGEST_CV_GEMINI=1 to enable).",
+    );
   }
   console.log(`Concurrency: ${conc}`);
 
@@ -119,7 +123,7 @@ async function main() {
         if (buf.length > 10 * 1024 * 1024) {
           throw new Error("exceeds 10 MB");
         }
-        await persistCvPdf(buf, name, { skipGemini });
+        await persistCvPdf(buf, name, { skipAi });
         ok++;
       } catch (e) {
         failed++;

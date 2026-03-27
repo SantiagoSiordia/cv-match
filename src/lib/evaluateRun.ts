@@ -1,7 +1,7 @@
 import {
-  evaluateCompatibilityWithGemini,
-  GeminiConfigError,
-} from "@/lib/gemini";
+  evaluateCompatibilityWithBedrock,
+  BedrockConfigError,
+} from "@/lib/bedrock";
 import { saveEvaluationRun } from "@/lib/evaluationsStore";
 import {
   getCvMeta,
@@ -67,15 +67,15 @@ export async function runEvaluation(input: EvaluateInput) {
       continue;
     }
     try {
-      const result = await evaluateCompatibilityWithGemini(jobText, cvText);
+      const result = await evaluateCompatibilityWithBedrock(jobText, cvText);
       results.push({
         cvId,
         cvOriginalName: cvMeta.originalName,
         result,
       });
     } catch (e) {
-      if (e instanceof GeminiConfigError) {
-        throw new EvaluateError("GEMINI_CONFIG", e.message, 500);
+      if (e instanceof BedrockConfigError) {
+        throw new EvaluateError("BEDROCK_CONFIG", e.message, 500);
       }
       const msg = e instanceof Error ? e.message : "Evaluation failed";
       results.push({

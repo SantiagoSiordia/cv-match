@@ -1,6 +1,6 @@
 /**
  * Ingest JSONL job descriptions (one JSON object per line: title, body) into
- * `job-descriptions/` without per-row Gemini title inference.
+ * `job-descriptions/` without per-row Bedrock title inference.
  *
  * Usage (from repo root):
  *   npx tsx scripts/ingest-job-descriptions-bulk.ts scripts/seed/tcs-jds-1500.jsonl

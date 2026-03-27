@@ -1,5 +1,3 @@
-import type { CvGeminiMeta } from "@/lib/schemas";
-
 const MAX_EXTRACT_CHARS = 14_000;
 
 function uploadDateUtcYmd(iso: string): string {
@@ -12,25 +10,26 @@ function uploadDateUtcYmd(iso: string): string {
 }
 
 /**
- * Single lowercase string for client search: file name, timestamps, LLM
- * fields, and a prefix of extracted résumé text (skills/terms mentioned in body).
+ * Single lowercase string for search: file name, title guess, mime, dates,
+ * optional error text, and a prefix of extracted JD body.
  */
-export function buildCvSearchIndex(
+export function buildJobSearchIndex(
   originalName: string,
   uploadedAtIso: string,
-  gemini: CvGeminiMeta | null | undefined,
+  titleGuess: string | null | undefined,
+  mimeType: string,
   extractedText: string,
+  geminiError?: string,
 ): string {
-  const baseName = (originalName || "").replace(/\.pdf$/i, "").trim();
-  const parts: string[] = [
-    baseName,
+  const base = (originalName || "").replace(/\.(pdf|txt)$/i, "").trim();
+  const parts = [
+    base,
     originalName || "",
     uploadedAtIso,
     uploadDateUtcYmd(uploadedAtIso),
-    gemini?.name ?? "",
-    gemini?.title ?? "",
-    gemini?.experienceSummary ?? "",
-    ...(gemini?.skills ?? []),
+    titleGuess ?? "",
+    mimeType,
+    geminiError ?? "",
     extractedText.slice(0, MAX_EXTRACT_CHARS),
   ];
   return parts

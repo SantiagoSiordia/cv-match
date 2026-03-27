@@ -11,14 +11,14 @@ vi.mock("@/lib/extractText", () => ({
   extractTextFromPlainBuffer: (b: Buffer) => b.toString("utf8"),
 }));
 
-vi.mock("@/lib/gemini", () => ({
-  GeminiConfigError: class GeminiConfigError extends Error {},
-  extractCvMetadataWithGemini: vi.fn(async () => ({
+vi.mock("@/lib/bedrock", () => ({
+  BedrockConfigError: class BedrockConfigError extends Error {},
+  extractCvMetadataWithBedrock: vi.fn(async () => ({
     name: "Test Candidate",
     skills: ["Testing"],
     experienceSummary: "Several years of testing.",
   })),
-  guessJobTitleWithGemini: vi.fn(async () => "QA Engineer"),
+  guessJobTitleWithBedrock: vi.fn(async () => "QA Engineer"),
 }));
 
 describe("storage (isolated cwd)", () => {

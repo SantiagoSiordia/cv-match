@@ -5,7 +5,7 @@
  *   npx tsx scripts/ingest-pdfs-from-directory.ts /path/to/pdf-folder
  *
  * By default skips Gemini per file (fast, no API usage). To extract metadata:
- *   INGEST_CV_GEMINI=1 npx tsx scripts/ingest-pdfs-from-directory.ts /path/to/pdf
+ *   INGEST_CV_AI=1 npx tsx scripts/ingest-pdfs-from-directory.ts /path/to/pdf
  */
 
 import { readFileSync } from "node:fs";
@@ -51,9 +51,13 @@ async function main() {
     process.exit(1);
   }
 
-  const skipGemini = process.env.INGEST_CV_GEMINI !== "1";
-  if (skipGemini) {
-    console.log("INGEST_CV_GEMINI=1 not set — skipping Gemini metadata per file.");
+  const skipAi =
+    process.env.INGEST_CV_AI !== "1" &&
+    process.env.INGEST_CV_GEMINI !== "1";
+  if (skipAi) {
+    console.log(
+      "INGEST_CV_AI=1 (or legacy INGEST_CV_GEMINI=1) not set — skipping AI metadata per file.",
+    );
   }
 
   const names = await readdir(abs);
@@ -73,7 +77,7 @@ async function main() {
         errors.push(`${name}: exceeds 10 MB`);
         continue;
       }
-      await persistCvPdf(buf, name, { skipGemini });
+      await persistCvPdf(buf, name, { skipAi });
       ok++;
       if (ok % 25 === 0) console.log(`… ${ok} / ${pdfs.length}`);
     } catch (e) {

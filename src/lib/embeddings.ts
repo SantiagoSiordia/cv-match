@@ -1,9 +1,15 @@
+import { InvokeModelCommand } from "@aws-sdk/client-bedrock-runtime";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import {
-  DEFAULT_EMBEDDING_MODEL,
+  DEFAULT_BEDROCK_EMBEDDING_MODEL,
   MAX_EMBEDDING_CHARS,
 } from "@/lib/constants";
+import {
+  BedrockConfigError,
+  generateTopMatchJustifications,
+  getBedrockRuntimeClient,
+} from "@/lib/bedrock";
 import { embeddingsDir, jobEmbeddingIndexPath } from "@/lib/paths";
 import {
   getCvMeta,
@@ -11,10 +17,6 @@ import {
   readCvExtractedText,
   readJobExtractedText,
 } from "@/lib/storage";
-import {
-  GeminiConfigError,
-  generateTopMatchJustifications,
-} from "@/lib/gemini";
 
 export class EmbeddingApiError extends Error {
   constructor(message: string) {
@@ -23,21 +25,24 @@ export class EmbeddingApiError extends Error {
   }
 }
 
-function getApiKey(): string {
-  const key = process.env.GEMINI_API_KEY?.trim();
-  if (!key) {
-    throw new GeminiConfigError();
-  }
-  return key;
-}
-
 function embeddingModelId(): string {
-  return process.env.GEMINI_EMBEDDING_MODEL?.trim() || DEFAULT_EMBEDDING_MODEL;
+  return (
+    process.env.BEDROCK_EMBEDDING_MODEL_ID?.trim() ||
+    DEFAULT_BEDROCK_EMBEDDING_MODEL
+  );
 }
 
 function truncateForEmbedding(text: string): string {
   if (text.length <= MAX_EMBEDDING_CHARS) return text;
   return `${text.slice(0, MAX_EMBEDDING_CHARS)}\n\n[TRUNCATED]`;
+}
+
+/** Titan has no separate "document title" field; prepend a short title line when present. */
+function documentEmbeddingInput(text: string, title?: string): string {
+  const t = title?.trim();
+  const body = truncateForEmbedding(text);
+  if (t) return `${t.slice(0, 200)}\n\n${body}`;
+  return body;
 }
 
 export function fingerprintText(text: string): string {
@@ -80,41 +85,62 @@ type JobIndexFile = {
   entries: Record<string, JobIndexEntry>;
 };
 
-const BATCH_SIZE = 100;
+/** Concurrent Titan invokes per wave to balance throughput vs throttling. */
+const EMBED_CONCURRENCY = 12;
+
+async function invokeTitanEmbedding(inputText: string): Promise<number[]> {
+  let client;
+  try {
+    client = getBedrockRuntimeClient();
+  } catch (e) {
+    if (e instanceof BedrockConfigError) throw e;
+    throw new EmbeddingApiError(
+      e instanceof Error ? e.message : "Bedrock client error",
+    );
+  }
+
+  const modelId = embeddingModelId();
+  const body = JSON.stringify({
+    inputText,
+    dimensions: 1024,
+    normalize: true,
+  });
+
+  try {
+    const out = await client.send(
+      new InvokeModelCommand({
+        modelId,
+        contentType: "application/json",
+        accept: "application/json",
+        body: new TextEncoder().encode(body),
+      }),
+    );
+    const raw = new TextDecoder().decode(out.body as Uint8Array);
+    const json = JSON.parse(raw) as { embedding?: number[] };
+    const values = json.embedding;
+    if (!values?.length) {
+      throw new EmbeddingApiError("Embedding response missing values");
+    }
+    return values;
+  } catch (e) {
+    if (e instanceof BedrockConfigError || e instanceof EmbeddingApiError) {
+      throw e;
+    }
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new EmbeddingApiError(`Embedding failed: ${msg}`);
+  }
+}
 
 async function embedContentSingle(
   text: string,
   taskType: "RETRIEVAL_QUERY" | "RETRIEVAL_DOCUMENT",
   title?: string,
 ): Promise<number[]> {
-  const key = getApiKey();
-  const model = embeddingModelId();
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:embedContent?key=${encodeURIComponent(key)}`;
-  const body: Record<string, unknown> = {
-    model: `models/${model}`,
-    content: { parts: [{ text: truncateForEmbedding(text) }] },
-    taskType,
-  };
-  if (title && taskType === "RETRIEVAL_DOCUMENT") {
-    body.title = title.slice(0, 200);
-  }
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new EmbeddingApiError(`Embedding failed: ${res.status} ${errText}`);
-  }
-  const json = (await res.json()) as {
-    embedding?: { values?: number[] };
-  };
-  const values = json.embedding?.values;
-  if (!values?.length) {
-    throw new EmbeddingApiError("Embedding response missing values");
-  }
-  return values;
+  const input =
+    taskType === "RETRIEVAL_DOCUMENT"
+      ? documentEmbeddingInput(text, title)
+      : truncateForEmbedding(text);
+  return invokeTitanEmbedding(input);
 }
 
 async function batchEmbedContents(
@@ -124,47 +150,19 @@ async function batchEmbedContents(
     title?: string;
   }>,
 ): Promise<number[][]> {
-  const key = getApiKey();
-  const model = embeddingModelId();
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:batchEmbedContents?key=${encodeURIComponent(key)}`;
-  const body = {
-    requests: requests.map((r) => {
-      const req: Record<string, unknown> = {
-        model: `models/${model}`,
-        content: { parts: [{ text: truncateForEmbedding(r.text) }] },
-        taskType: r.taskType,
-      };
-      if (r.title && r.taskType === "RETRIEVAL_DOCUMENT") {
-        req.title = r.title.slice(0, 200);
-      }
-      return req;
-    }),
-  };
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new EmbeddingApiError(
-      `Batch embedding failed: ${res.status} ${errText}`,
+  const results: number[][] = new Array(requests.length);
+  for (let i = 0; i < requests.length; i += EMBED_CONCURRENCY) {
+    const slice = requests.slice(i, i + EMBED_CONCURRENCY);
+    const vectors = await Promise.all(
+      slice.map((r) =>
+        embedContentSingle(r.text, r.taskType, r.title),
+      ),
     );
-  }
-  const json = (await res.json()) as {
-    embeddings?: Array<{ values?: number[] }>;
-  };
-  const embs = json.embeddings;
-  if (!embs || embs.length !== requests.length) {
-    throw new EmbeddingApiError("Batch embedding response length mismatch");
-  }
-  return embs.map((e, i) => {
-    const v = e.values;
-    if (!v?.length) {
-      throw new EmbeddingApiError(`Missing embedding at index ${i}`);
+    for (let j = 0; j < slice.length; j++) {
+      results[i + j] = vectors[j]!;
     }
-    return v;
-  });
+  }
+  return results;
 }
 
 async function loadJobIndex(): Promise<JobIndexFile> {
@@ -223,8 +221,9 @@ export async function ensureJobEmbeddingIndex(): Promise<JobIndexFile> {
     toEmbed.push({ id: job.id, text, title, fingerprint: fp });
   }
 
-  for (let i = 0; i < toEmbed.length; i += BATCH_SIZE) {
-    const chunk = toEmbed.slice(i, i + BATCH_SIZE);
+  const batchSize = 100;
+  for (let i = 0; i < toEmbed.length; i += batchSize) {
+    const chunk = toEmbed.slice(i, i + batchSize);
     const vectors = await batchEmbedContents(
       chunk.map((c) => ({
         text: c.text,

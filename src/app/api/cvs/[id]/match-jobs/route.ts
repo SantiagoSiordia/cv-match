@@ -4,7 +4,7 @@ import {
   enrichTopMatchJustifications,
   rankCvAgainstJobs,
 } from "@/lib/embeddings";
-import { GeminiConfigError } from "@/lib/gemini";
+import { BedrockConfigError } from "@/lib/bedrock";
 import { prepareCvForMatch } from "@/lib/storage";
 
 export async function POST(
@@ -27,8 +27,8 @@ export async function POST(
     if (e instanceof Error && e.message === "CV_TEXT_MISSING") {
       return jsonError(400, "CV_TEXT_MISSING", "No extractable text for this CV");
     }
-    if (e instanceof GeminiConfigError) {
-      return jsonError(500, "GEMINI_CONFIG", e.message);
+    if (e instanceof BedrockConfigError) {
+      return jsonError(500, "BEDROCK_CONFIG", e.message);
     }
     if (e instanceof EmbeddingApiError) {
       return jsonError(500, "EMBEDDING_FAILED", e.message);
