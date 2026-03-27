@@ -1,9 +1,31 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { JobStoredMeta } from "@/lib/schemas";
 import type { ApiErrorBody, ApiJobList } from "@/components/ApiTypes";
 import { PreviewModal } from "@/components/PreviewModal";
+import {
+  JOB_SEARCH_FIELD_LABEL,
+  jobMatchesSearchQuery,
+} from "@/lib/jobSearchFilter";
+
+function SearchIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <circle cx="11" cy="11" r="8" />
+      <path d="m21 21-4.3-4.3" />
+    </svg>
+  );
+}
 
 export function JobsClient() {
   const [items, setItems] = useState<JobStoredMeta[]>([]);
@@ -15,6 +37,7 @@ export function JobsClient() {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [creating, setCreating] = useState(false);
+  const [jobSearchQuery, setJobSearchQuery] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -139,6 +162,19 @@ export function JobsClient() {
     ? items.find((i) => i.id === previewId)
     : undefined;
 
+  const filteredItems = useMemo(
+    () => items.filter((job) => jobMatchesSearchQuery(job, jobSearchQuery)),
+    [items, jobSearchQuery],
+  );
+
+  const listSummary = useMemo(() => {
+    if (items.length === 0) return null;
+    const q = jobSearchQuery.trim();
+    return q.length > 0
+      ? `${filteredItems.length} of ${items.length} shown`
+      : `${items.length} job description${items.length === 1 ? "" : "s"}`;
+  }, [filteredItems.length, items.length, jobSearchQuery]);
+
   return (
     <div className="mx-auto max-w-5xl px-4 py-8">
       <div className="mb-8">
@@ -211,8 +247,35 @@ export function JobsClient() {
             No job descriptions yet. Upload or paste one above.
           </p>
         ) : (
+          <>
+            {listSummary ? (
+              <p className="mb-2 text-xs text-zinc-500 dark:text-zinc-400">
+                {listSummary}
+              </p>
+            ) : null}
+            <div className="relative mb-4">
+              <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 dark:text-zinc-500">
+                <SearchIcon className="size-4" />
+              </span>
+              <input
+                type="search"
+                autoComplete="off"
+                placeholder={JOB_SEARCH_FIELD_LABEL}
+                aria-label={JOB_SEARCH_FIELD_LABEL}
+                title="Searches file name, inferred title, MIME type, upload date, and extracted text"
+                value={jobSearchQuery}
+                onChange={(e) => setJobSearchQuery(e.target.value)}
+                className="w-full rounded-xl border border-zinc-200 bg-white py-2.5 pl-9 pr-3 text-sm text-zinc-900 placeholder:text-zinc-400 shadow-sm focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-400/30 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500 dark:focus:ring-zinc-500/25"
+              />
+            </div>
+            {filteredItems.length === 0 ? (
+              <p className="rounded-xl border border-zinc-200 bg-white px-4 py-8 text-center text-sm text-zinc-600 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400">
+                No job descriptions match “{jobSearchQuery.trim()}”. Clear the
+                search to see all.
+              </p>
+            ) : (
           <ul className="space-y-3">
-            {items.map((job) => (
+            {filteredItems.map((job) => (
               <li
                 key={job.id}
                 className="flex flex-col gap-3 rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-950 sm:flex-row sm:items-start sm:justify-between"
@@ -263,6 +326,8 @@ export function JobsClient() {
               </li>
             ))}
           </ul>
+            )}
+          </>
         )}
       </div>
 

@@ -4,6 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type { CvStoredMeta } from "@/lib/schemas";
 import type { ApiCvList, ApiErrorBody } from "@/components/ApiTypes";
+import {
+  CV_SEARCH_FIELD_LABEL,
+  cvMatchesSearchQuery,
+} from "@/lib/cvSearchFilter";
 import { PreviewModal } from "@/components/PreviewModal";
 
 type JobMatchItem = {
@@ -24,33 +28,6 @@ function formatUploadDate(iso: string): string {
   const m = String(d.getUTCMonth() + 1).padStart(2, "0");
   const day = String(d.getUTCDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
-}
-
-/** Single stable string for placeholder + aria-label (avoids label/SSR drift and hydration mismatches). */
-const RESUME_SEARCH_FIELD_LABEL = "Search resumes";
-
-function resumeSearchHaystack(cv: CvStoredMeta): string {
-  if (cv.searchIndex?.trim()) return cv.searchIndex;
-  return [
-    cv.originalName,
-    cv.gemini?.name ?? "",
-    cv.gemini?.title ?? "",
-    cv.gemini?.experienceSummary ?? "",
-    formatUploadDate(cv.uploadedAt),
-    cv.uploadedAt,
-    ...(cv.gemini?.skills ?? []),
-  ]
-    .join(" ")
-    .toLowerCase();
-}
-
-/** Whitespace-separated tokens must all appear (AND), so "react node" finds both. */
-function cvMatchesResumeSearch(cv: CvStoredMeta, q: string): boolean {
-  const trimmed = q.trim().toLowerCase();
-  if (!trimmed) return true;
-  const hay = resumeSearchHaystack(cv);
-  const tokens = trimmed.split(/\s+/).filter(Boolean);
-  return tokens.every((t) => hay.includes(t));
 }
 
 export function CvsClient() {
@@ -211,7 +188,7 @@ export function CvsClient() {
     : undefined;
 
   const filteredItems = useMemo(
-    () => items.filter((cv) => cvMatchesResumeSearch(cv, resumeQuery)),
+    () => items.filter((cv) => cvMatchesSearchQuery(cv, resumeQuery)),
     [items, resumeQuery],
   );
 
@@ -288,8 +265,8 @@ export function CvsClient() {
               id="resume-search"
               type="search"
               autoComplete="off"
-              placeholder={RESUME_SEARCH_FIELD_LABEL}
-              aria-label={RESUME_SEARCH_FIELD_LABEL}
+              placeholder={CV_SEARCH_FIELD_LABEL}
+              aria-label={CV_SEARCH_FIELD_LABEL}
               value={resumeQuery}
               onChange={(e) => setResumeQuery(e.target.value)}
               disabled={loading || items.length === 0}
