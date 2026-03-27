@@ -2,6 +2,8 @@ import { z } from "zod";
 
 export const cvGeminiMetaSchema = z.object({
   name: z.string().nullable(),
+  /** Professional headline e.g. Software Engineer, Game Developer (optional for older extractions). */
+  title: z.string().nullable().optional(),
   skills: z.array(z.string()),
   experienceSummary: z.string().nullable(),
 });
@@ -20,6 +22,20 @@ export const compatibilityResultSchema = z.object({
 
 export type CompatibilityResult = z.infer<typeof compatibilityResultSchema>;
 
+/** Response shape for embedding match explanation (top roles only). */
+export const topMatchJustificationsResponseSchema = z.object({
+  items: z.array(
+    z.object({
+      jobDescriptionId: z.string(),
+      justification: z.string(),
+    }),
+  ),
+});
+
+export type TopMatchJustificationsResponse = z.infer<
+  typeof topMatchJustificationsResponseSchema
+>;
+
 export const cvStoredMetaSchema = z.object({
   id: z.string().uuid(),
   originalName: z.string(),
@@ -30,6 +46,8 @@ export const cvStoredMetaSchema = z.object({
   lowTextWarning: z.boolean().optional(),
   gemini: cvGeminiMetaSchema.nullable().optional(),
   geminiError: z.string().optional(),
+  /** Normalized concat of name, title, skills, dates, filename, + résumé text slice — for search. */
+  searchIndex: z.string().optional(),
 });
 
 export type CvStoredMeta = z.infer<typeof cvStoredMetaSchema>;

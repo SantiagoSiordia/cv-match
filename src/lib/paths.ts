@@ -27,3 +27,12 @@ export function jobDescriptionsDir(): string {
 export function evaluationsDir(): string {
   return path.join(projectRoot(), "evaluations");
 }
+
+/** Cached job embedding vectors (gitignored). */
+export function embeddingsDir(): string {
+  return path.join(projectRoot(), "embeddings");
+}
+
+export function jobEmbeddingIndexPath(): string {
+  return path.join(embeddingsDir(), "job-index.json");
+}

@@ -2,6 +2,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import {
   compatibilityResultSchema,
   cvGeminiMetaSchema,
+  topMatchJustificationsResponseSchema,
   type CompatibilityResult,
   type CvGeminiMeta,
 } from "@/lib/schemas";
@@ -62,10 +63,11 @@ export async function extractCvMetadataWithGemini(
   const prompt = `You extract structured data from a CV/resume text.
 
 Return ONLY JSON matching this shape:
-{"name": string|null, "skills": string[], "experienceSummary": string|null}
+{"name": string|null, "title": string|null, "skills": string[], "experienceSummary": string|null}
 
 Rules:
 - name: candidate full name if clearly stated, else null
+- title: current or primary professional role as written on the CV — a short job title or headline only (e.g. "Software Engineer", "Senior Game Developer", "Full Stack Developer"), typically 2–6 words. Infer from job headings or subtitle under the name if present; else null if unclear
 - skills: concise skill phrases (max ~25 items)
 - experienceSummary: 2-4 sentences on roles and seniority, else null
 
@@ -79,6 +81,29 @@ ${truncateForPrompt(cvText, 24_000)}
   const text = res.response.text();
   const parsed = parseJsonObject<unknown>(text);
   return cvGeminiMetaSchema.parse(parsed);
+}
+
+/** Short professional title from résumé text only (for backfill when `title` was missing). */
+export async function guessCvTitleWithGemini(
+  cvText: string,
+): Promise<string | null> {
+  const model = getGenerativeModel();
+  const prompt = `From this résumé/CV text, infer the candidate's current or primary professional role as a short job title or headline only (2–8 words), e.g. "Software Engineer", "Senior Game Developer". Use what appears under their name or the most recent role if that's clearly their focus. Return null only if you cannot infer.
+
+Return ONLY JSON: {"title": string|null}
+
+Résumé text:
+---
+${truncateForPrompt(cvText, 24_000)}
+---
+`;
+
+  const res = await model.generateContent(prompt);
+  const text = res.response.text();
+  const parsed = parseJsonObject<{ title?: string | null }>(text);
+  if (parsed.title === undefined || parsed.title === null) return null;
+  const t = String(parsed.title).trim();
+  return t.length ? t : null;
 }
 
 export async function guessJobTitleWithGemini(
@@ -142,6 +167,72 @@ ${truncateForPrompt(cvText, 24_000)}
   const text = res.response.text();
   const parsed = parseJsonObject<unknown>(text);
   return compatibilityResultSchema.parse(parsed);
+}
+
+export type TopMatchJustificationInput = {
+  jobDescriptionId: string;
+  title: string;
+  jdText: string;
+  scorePercent: number;
+};
+
+/**
+ * Short prose explaining why each embedding match % is plausible, for the top
+ * ranked jobs only. Uses the same CV + JD text the user sees in the product.
+ */
+export async function generateTopMatchJustifications(
+  cvText: string,
+  matches: TopMatchJustificationInput[],
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (matches.length === 0) return out;
+
+  const model = getGenerativeModel();
+  const cvSlice = truncateForPrompt(cvText, 18_000);
+  const blocks = matches.map((m, i) => {
+    const jdSlice = truncateForPrompt(m.jdText, 10_000);
+    return [
+      `### Rank ${i + 1}`,
+      `jobDescriptionId: ${m.jobDescriptionId}`,
+      `Display title: ${m.title}`,
+      `Reported match score: ${m.scorePercent}% (from embedding similarity, not a human interview).`,
+      `Job description:`,
+      "---",
+      jdSlice,
+      "---",
+    ].join("\n");
+  });
+
+  const prompt = `You help recruiters interpret automated "match %" scores from this app.
+
+How the % is computed: the résumé and each job description are converted to text embeddings; cosine similarity is mapped to 0–100%. Higher % means the texts overlap more in skills, domain language, and themes in vector space — it is a statistical text similarity, not a hiring decision.
+
+For EACH job block below, write one justification of 2–4 sentences that:
+- Relates the résumé content to that job's requirements and explains why the given score is plausible (strengths and gaps).
+- Does not invent employers, degrees, or skills that are not supported by the résumé text.
+- If the score is low, say what seems misaligned or missing; if high, what aligns.
+
+Return ONLY JSON with this exact shape:
+{"items":[{"jobDescriptionId":"<same id as in the block>","justification":"<your text>"}]}
+The items array must have exactly ${matches.length} entries in the same order as the blocks below.
+
+Résumé:
+---
+${cvSlice}
+---
+
+${blocks.join("\n\n")}
+`;
+
+  const res = await model.generateContent(prompt);
+  const text = res.response.text();
+  const parsed = parseJsonObject<unknown>(text);
+  const validated = topMatchJustificationsResponseSchema.parse(parsed);
+  for (const row of validated.items) {
+    const j = row.justification.trim();
+    if (j.length) out.set(row.jobDescriptionId, j);
+  }
+  return out;
 }
 
 function truncateForPrompt(text: string, maxChars: number): string {

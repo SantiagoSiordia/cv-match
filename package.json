@@ -12,7 +12,11 @@
     "check": "npm run lint && tsc --noEmit && npm run test",
     "ingest:cvs": "tsx scripts/ingest-pdfs-from-directory.ts",
     "ingest:cv-dataset": "tsx scripts/ingest-github-cv-dataset.ts",
-    "migrate:cvs-layout": "tsx scripts/migrate-cvs-to-split-layout.ts"
+    "migrate:cvs-layout": "tsx scripts/migrate-cvs-to-split-layout.ts",
+    "generate:jds": "tsx scripts/generate-tcs-job-descriptions.ts scripts/seed/tcs-jds-1500.jsonl",
+    "generate:jds:50": "tsx scripts/generate-tcs-job-descriptions.ts scripts/seed/tcs-jds-50.jsonl 50",
+    "seed:jds": "tsx scripts/ingest-job-descriptions-bulk.ts scripts/seed/tcs-jds-1500.jsonl",
+    "seed:jds:50": "tsx scripts/ingest-job-descriptions-bulk.ts scripts/seed/tcs-jds-50.jsonl"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",

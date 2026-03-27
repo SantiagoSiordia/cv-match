@@ -12,9 +12,11 @@ import {
 import { extractTextFromPdf, extractTextFromPlainBuffer } from "@/lib/extractText";
 import {
   extractCvMetadataWithGemini,
+  guessCvTitleWithGemini,
   guessJobTitleWithGemini,
   GeminiConfigError,
 } from "@/lib/gemini";
+import { buildCvSearchIndex } from "@/lib/cvSearchIndex";
 import type { CvStoredMeta, JobStoredMeta } from "@/lib/schemas";
 
 export class StorageError extends Error {
@@ -116,16 +118,23 @@ export async function persistCvPdf(
     }
   }
 
+  const uploadedAt = new Date().toISOString();
   const meta: CvStoredMeta = {
     id,
     originalName: originalName || "cv.pdf",
-    uploadedAt: new Date().toISOString(),
+    uploadedAt,
     type: "cv",
     storageFileName,
     extractedCharCount: extracted.length,
     ...(lowTextWarning ? { lowTextWarning: true } : {}),
     gemini,
     ...(geminiError ? { geminiError } : {}),
+    searchIndex: buildCvSearchIndex(
+      originalName || "cv.pdf",
+      uploadedAt,
+      gemini,
+      extracted,
+    ),
   };
 
   await writeFile(cvMetaFile(id), JSON.stringify(meta, null, 2), "utf8");
@@ -185,6 +194,88 @@ export async function readCvExtractedText(id: string): Promise<string | null> {
   }
 }
 
+/** True when we should run full Gemini extraction (missing or thin metadata). */
+function cvNeedsGeminiBackfill(meta: CvStoredMeta): boolean {
+  if (!meta.gemini) return true;
+  const g = meta.gemini;
+  const hasIdentity = !!(g.name?.trim() || g.title?.trim());
+  if (!hasIdentity) return true;
+  if (g.skills.length === 0) return true;
+  if (!g.experienceSummary?.trim()) return true;
+  return false;
+}
+
+/**
+ * Before job matching: backfill Gemini metadata (name, title, skills, summary) when
+ * incomplete, then infer title if still missing. Updates `searchIndex`. Re-throws
+ * `GeminiConfigError` (no API key). On extraction failure with no prior gemini, sets
+ * `geminiError` and still returns meta for the match to proceed.
+ */
+export async function prepareCvForMatch(cvId: string): Promise<CvStoredMeta | null> {
+  const meta = await getCvMeta(cvId);
+  if (!meta) return null;
+
+  const text = (await readCvExtractedText(cvId)) ?? "";
+  if (!text.trim()) return meta;
+
+  let gemini = meta.gemini ?? null;
+  let geminiError: string | undefined = meta.geminiError;
+  let changed = false;
+
+  if (cvNeedsGeminiBackfill(meta)) {
+    try {
+      gemini = await extractCvMetadataWithGemini(text);
+      geminiError = undefined;
+      changed = true;
+    } catch (e) {
+      if (e instanceof GeminiConfigError) {
+        throw e;
+      }
+      if (!meta.gemini) {
+        geminiError =
+          e instanceof Error ? e.message : "Metadata extraction failed";
+        gemini = null;
+        changed = true;
+      } else {
+        gemini = meta.gemini;
+      }
+    }
+  }
+
+  if (gemini && !gemini.title?.trim()) {
+    try {
+      const title = await guessCvTitleWithGemini(text);
+      if (title?.trim()) {
+        gemini = { ...gemini, title: title.trim() };
+        changed = true;
+      }
+    } catch {
+      /* ignore title inference errors */
+    }
+  }
+
+  if (!changed) return meta;
+
+  const next: CvStoredMeta = {
+    ...meta,
+    gemini,
+    searchIndex: buildCvSearchIndex(
+      meta.originalName,
+      meta.uploadedAt,
+      gemini,
+      text,
+    ),
+  };
+  if (geminiError !== undefined) {
+    next.geminiError = geminiError;
+  } else {
+    delete (next as { geminiError?: string }).geminiError;
+  }
+
+  await writeFile(cvMetaFile(cvId), JSON.stringify(next, null, 2), "utf8");
+  return next;
+}
+
 export async function readCvPdfPath(id: string): Promise<string | null> {
   const meta = await getCvMeta(id);
   if (!meta) return null;
@@ -221,33 +312,28 @@ function isTextMime(mime: string, name: string) {
   return name.toLowerCase().endsWith(".txt");
 }
 
-export async function saveJobDescriptionFromFile(
-  file: File,
+export type PersistJobDescriptionOptions = {
+  /** When true, do not call Gemini for title; use `explicitTitleGuess` or null. */
+  skipTitleInference?: boolean;
+  /** Used when `skipTitleInference` is true (e.g. bulk seed title). */
+  explicitTitleGuess?: string | null;
+};
+
+/**
+ * Core write path for job descriptions (PDF or plain text buffer).
+ */
+export async function persistJobDescriptionFromBuffer(
+  buffer: Buffer,
+  originalName: string,
+  effectiveMime: "application/pdf" | "text/plain",
+  options: PersistJobDescriptionOptions = {},
 ): Promise<JobStoredMeta> {
   await initStorageDirs();
-  assertSize(file.size);
-  const name = file.name || "job-description";
-  const mime = (file.type || "").toLowerCase();
+  assertSize(buffer.length);
 
   const id = randomUUID();
-  let storageFileName: string;
-  let buffer: Buffer;
-  let effectiveMime: string;
-
-  if (isPdfMime(mime, name)) {
-    storageFileName = `${id}.pdf`;
-    effectiveMime = "application/pdf";
-    buffer = Buffer.from(await file.arrayBuffer());
-  } else if (isTextMime(mime, name)) {
-    storageFileName = `${id}.txt`;
-    effectiveMime = "text/plain";
-    buffer = Buffer.from(await file.arrayBuffer());
-  } else {
-    throw new StorageError(
-      "Job description must be PDF or plain text (.txt)",
-      "INVALID_TYPE",
-    );
-  }
+  const storageFileName =
+    effectiveMime === "application/pdf" ? `${id}.pdf` : `${id}.txt`;
 
   await writeFile(path.join(jobDescriptionsDir(), storageFileName), buffer);
 
@@ -262,18 +348,22 @@ export async function saveJobDescriptionFromFile(
   } catch {
     extractError = "Could not extract text";
   }
-  await writeFile(
-    jdExtractedPath(id),
-    extracted,
-    "utf8",
-  );
+  await writeFile(jdExtractedPath(id), extracted, "utf8");
 
   const lowTextWarning =
     extracted.length > 0 && extracted.length < LOW_TEXT_THRESHOLD_CHARS;
 
+  const skipTitle = options.skipTitleInference === true;
   let titleGuess: string | null | undefined;
   let geminiError: string | undefined;
-  if (extracted.length > 0) {
+
+  if (skipTitle) {
+    const t = options.explicitTitleGuess?.trim();
+    titleGuess = t?.length ? t : null;
+    if (extracted.length === 0) {
+      geminiError = extractError ?? "No text extracted";
+    }
+  } else if (extracted.length > 0) {
     try {
       titleGuess = await guessJobTitleWithGemini(extracted);
     } catch (e) {
@@ -291,7 +381,7 @@ export async function saveJobDescriptionFromFile(
 
   const meta: JobStoredMeta = {
     id,
-    originalName: name,
+    originalName: originalName || "job-description",
     uploadedAt: new Date().toISOString(),
     type: "job_description",
     storageFileName,
@@ -302,12 +392,33 @@ export async function saveJobDescriptionFromFile(
     ...(geminiError ? { geminiError } : {}),
   };
 
-  await writeFile(
-    jdMetaPath(id),
-    JSON.stringify(meta, null, 2),
-    "utf8",
-  );
+  await writeFile(jdMetaPath(id), JSON.stringify(meta, null, 2), "utf8");
   return meta;
+}
+
+export async function saveJobDescriptionFromFile(
+  file: File,
+): Promise<JobStoredMeta> {
+  const name = file.name || "job-description";
+  const mime = (file.type || "").toLowerCase();
+
+  let buffer: Buffer;
+  let effectiveMime: "application/pdf" | "text/plain";
+
+  if (isPdfMime(mime, name)) {
+    effectiveMime = "application/pdf";
+    buffer = Buffer.from(await file.arrayBuffer());
+  } else if (isTextMime(mime, name)) {
+    effectiveMime = "text/plain";
+    buffer = Buffer.from(await file.arrayBuffer());
+  } else {
+    throw new StorageError(
+      "Job description must be PDF or plain text (.txt)",
+      "INVALID_TYPE",
+    );
+  }
+
+  return persistJobDescriptionFromBuffer(buffer, name, effectiveMime, {});
 }
 
 export async function listJobDescriptions(): Promise<JobStoredMeta[]> {
@@ -382,10 +493,15 @@ export async function deleteJobDescription(id: string): Promise<boolean> {
 export async function saveJobDescriptionFromText(
   title: string,
   body: string,
+  options: PersistJobDescriptionOptions = {},
 ): Promise<JobStoredMeta> {
   const safeName = `${sanitizeFilename(title) || "job-description"}.txt`;
-  const file = new File([body], safeName, { type: "text/plain" });
-  return saveJobDescriptionFromFile(file);
+  const buffer = Buffer.from(body, "utf8");
+  const skip = options.skipTitleInference === true;
+  return persistJobDescriptionFromBuffer(buffer, safeName, "text/plain", {
+    skipTitleInference: skip,
+    explicitTitleGuess: skip ? title.trim() || null : undefined,
+  });
 }
 
 function sanitizeFilename(name: string): string {

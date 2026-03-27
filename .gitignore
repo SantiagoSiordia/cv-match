@@ -54,3 +54,5 @@ next-env.d.ts
 !/job-descriptions/.gitkeep
 /evaluations/*
 !/evaluations/.gitkeep
+/embeddings/*
+!/embeddings/.gitkeep

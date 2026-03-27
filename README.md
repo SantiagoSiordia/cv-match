@@ -48,7 +48,7 @@ GEMINI_API_KEY=your_key_here
 Optional:
 
 ```env
-GEMINI_MODEL=gemini-2.0-flash
+GEMINI_MODEL=gemini-2.5-flash
 ```
 
 If `GEMINI_MODEL` is omitted, the app uses its built-in default (see `src/lib/constants.ts`).
@@ -66,8 +66,32 @@ The app writes uploads and evaluation history under the project root:
 | `cvs-meta/` | Metadata JSON per CV |
 | `job-descriptions/` | Uploaded JD files + sidecars |
 | `evaluations/` | One JSON file per evaluation run |
+| `embeddings/` | Cached Gemini vectors for job descriptions (used by CV “Match to jobs”) |
 
 These directories are **gitignored** in this repo (only `.gitkeep` files are committed). They are created automatically when you use the app.
+
+### TCS-style job corpus (optional)
+
+Job descriptions are stored under `job-descriptions/` after you run a seed script (no per-row Gemini calls). **Résumés are uploaded separately** as PDFs on the `/cvs` page; those files go to `cvs-pdf/`.
+
+**50 roles** (smaller set):
+
+```bash
+npm run seed:jds:50
+```
+
+**~1500 roles** (full corpus):
+
+```bash
+npm run seed:jds
+```
+
+Regenerate JSONL after editing templates in `scripts/generate-tcs-job-descriptions.ts`:
+
+```bash
+npm run generate:jds:50   # 50 rows → scripts/seed/tcs-jds-50.jsonl
+npm run generate:jds      # 1500 rows → scripts/seed/tcs-jds-1500.jsonl
+```
 
 ---
 
