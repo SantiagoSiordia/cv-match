@@ -111,7 +111,7 @@ async function invokeClaudeJson(prompt: string): Promise<string> {
   return text;
 }
 
-function stripJsonFence(raw: string): string {
+export function stripJsonFence(raw: string): string {
   const trimmed = raw.trim();
   const fence = /^```(?:json)?\s*([\s\S]*?)```$/m.exec(trimmed);
   if (fence?.[1]) return fence[1].trim();

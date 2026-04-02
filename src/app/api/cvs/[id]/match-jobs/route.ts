@@ -5,6 +5,7 @@ import {
   rankCvAgainstJobs,
 } from "@/lib/embeddings";
 import { BedrockConfigError } from "@/lib/bedrock";
+import { isAiProviderConfigError } from "@/lib/aiProvider";
 import { prepareCvForMatch } from "@/lib/storage";
 
 export async function POST(
@@ -27,8 +28,9 @@ export async function POST(
     if (e instanceof Error && e.message === "CV_TEXT_MISSING") {
       return jsonError(400, "CV_TEXT_MISSING", "No extractable text for this CV");
     }
-    if (e instanceof BedrockConfigError) {
-      return jsonError(500, "BEDROCK_CONFIG", e.message);
+    if (isAiProviderConfigError(e) || e instanceof BedrockConfigError) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return jsonError(500, "AI_CONFIG", msg);
     }
     if (e instanceof EmbeddingApiError) {
       return jsonError(500, "EMBEDDING_FAILED", e.message);

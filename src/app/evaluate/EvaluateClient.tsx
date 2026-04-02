@@ -438,7 +438,7 @@ export function EvaluateClient() {
               role="status"
               aria-live="polite"
             >
-              Calling Bedrock for each CV — this can take a little while.
+              Calling the AI model for each CV — this can take a little while.
             </p>
           ) : null}
         </div>

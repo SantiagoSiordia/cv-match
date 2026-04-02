@@ -20,10 +20,12 @@
     "generate:jds": "tsx scripts/generate-tcs-job-descriptions.ts scripts/seed/tcs-jds-1500.jsonl",
     "generate:jds:50": "tsx scripts/generate-tcs-job-descriptions.ts scripts/seed/tcs-jds-50.jsonl 50",
     "seed:jds": "tsx scripts/ingest-job-descriptions-bulk.ts scripts/seed/tcs-jds-1500.jsonl",
-    "seed:jds:50": "tsx scripts/ingest-job-descriptions-bulk.ts scripts/seed/tcs-jds-50.jsonl"
+    "seed:jds:50": "tsx scripts/ingest-job-descriptions-bulk.ts scripts/seed/tcs-jds-50.jsonl",
+    "seed:full": "tsx scripts/seed-full.ts"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.1019.0",
+    "@google/generative-ai": "^0.24.1",
     "nanoid": "^5.1.7",
     "next": "16.2.1",
     "pdf-parse": "^2.4.5",

@@ -8,6 +8,10 @@ import {
   CV_SEARCH_FIELD_LABEL,
   cvMatchesSearchQuery,
 } from "@/lib/cvSearchFilter";
+import {
+  SEED_DEFAULT_MAX_CV_FILES,
+  SEED_MAX_CV_FILES_CAP,
+} from "@/lib/seedLimits";
 import { PreviewModal } from "@/components/PreviewModal";
 
 type JobMatchItem = {
@@ -28,6 +32,232 @@ function formatUploadDate(iso: string): string {
   const m = String(d.getUTCMonth() + 1).padStart(2, "0");
   const day = String(d.getUTCDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
+}
+
+function formatSeedLine(raw: unknown): string {
+  if (!raw || typeof raw !== "object") return String(raw);
+  const o = raw as Record<string, unknown>;
+  switch (o.phase) {
+    case "cleared_cvs":
+      return `Removed ${Number(o.count)} CV(s).`;
+    case "cleared_jds":
+      return `Removed ${Number(o.count)} job description(s).`;
+    case "jd_progress":
+      return `Job descriptions: ${Number(o.imported)} imported, ${Number(o.failed)} failed (of ${Number(o.total)} lines).`;
+    case "jd_done":
+      return `Job descriptions finished: ${Number(o.imported)} imported, ${Number(o.failed)} failed.`;
+    case "cv_progress":
+      return `CVs: ${Number(o.done)}/${Number(o.total)} (${Number(o.ok)} ok, ${Number(o.failed)} failed).`;
+    case "done":
+      return `Done. JDs ${Number(o.jdImported)} ok / ${Number(o.jdFailed)} failed; CVs ${Number(o.cvOk)} ok / ${Number(o.cvFailed)} failed.`;
+    case "error":
+      return `Error: ${String(o.message ?? "?")}`;
+    default:
+      return JSON.stringify(raw);
+  }
+}
+
+function parseSeedCvCountInput(s: string): number | null {
+  const t = s.trim();
+  if (!/^\d+$/.test(t)) return null;
+  const n = parseInt(t, 10);
+  if (n < 1 || n > SEED_MAX_CV_FILES_CAP) return null;
+  return n;
+}
+
+function SeedDatasetPanel({ load }: { load: () => Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  const [confirmText, setConfirmText] = useState("");
+  const [maxCvFilesInput, setMaxCvFilesInput] = useState(
+    String(SEED_DEFAULT_MAX_CV_FILES),
+  );
+  const [busy, setBusy] = useState(false);
+  const [log, setLog] = useState<string[]>([]);
+  const [banner, setBanner] = useState<string | null>(null);
+
+  const maxCvFiles = parseSeedCvCountInput(maxCvFilesInput);
+  const canRun = confirmText === "DELETE" && maxCvFiles !== null && !busy;
+
+  async function runSeed() {
+    if (busy) return;
+    if (confirmText !== "DELETE") return;
+    const n = parseSeedCvCountInput(maxCvFilesInput);
+    if (n === null) {
+      setBanner(
+        `Enter a whole number of CVs between 1 and ${SEED_MAX_CV_FILES_CAP}.`,
+      );
+      return;
+    }
+    setBusy(true);
+    setBanner(null);
+    setLog([]);
+    try {
+      const res = await fetch("/api/admin/seed", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ confirm: "DELETE", maxCvFiles: n }),
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => null)) as
+          | { error?: { message?: string } }
+          | null;
+        setBanner(
+          j?.error?.message ?? `Request failed (${res.status}).`,
+        );
+        return;
+      }
+      const reader = res.body?.getReader();
+      if (!reader) {
+        setBanner("No response body.");
+        return;
+      }
+      const dec = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const parts = buf.split("\n");
+        buf = parts.pop() ?? "";
+        for (const line of parts) {
+          const t = line.trim();
+          if (!t) continue;
+          let ev: unknown;
+          try {
+            ev = JSON.parse(t) as unknown;
+          } catch {
+            setLog((p) => [...p, `Invalid line: ${t.slice(0, 120)}`]);
+            continue;
+          }
+          setLog((p) => [...p, formatSeedLine(ev)]);
+          if (
+            ev &&
+            typeof ev === "object" &&
+            (ev as { phase?: string }).phase === "done"
+          ) {
+            void load();
+          }
+          if (
+            ev &&
+            typeof ev === "object" &&
+            (ev as { phase?: string }).phase === "error"
+          ) {
+            void load();
+          }
+        }
+      }
+      const tail = buf.trim();
+      if (tail) {
+        try {
+          const ev = JSON.parse(tail) as unknown;
+          setLog((p) => [...p, formatSeedLine(ev)]);
+          const ph =
+            ev && typeof ev === "object"
+              ? (ev as { phase?: string }).phase
+              : undefined;
+          if (ph === "done" || ph === "error") void load();
+        } catch {
+          /* ignore */
+        }
+      }
+    } catch (e) {
+      setBanner(e instanceof Error ? e.message : "Seed request failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50/80 p-4 dark:border-amber-900/60 dark:bg-amber-950/30">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold text-amber-950 dark:text-amber-100">
+          Seed full dataset
+        </h2>
+        <button
+          type="button"
+          className="rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-medium text-amber-950 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100 dark:hover:bg-amber-900"
+          onClick={() => {
+            setOpen((v) => !v);
+            setBanner(null);
+          }}
+        >
+          {open ? "Hide" : "Show"}
+        </button>
+      </div>
+      <p className="mt-2 text-xs text-amber-900/90 dark:text-amber-200/90">
+        Deletes <strong className="font-medium">all</strong> CVs and job
+        descriptions, then imports ~1500 JDs from{" "}
+        <code className="rounded bg-amber-100/80 px-1 dark:bg-amber-950">
+          scripts/seed/tcs-jds-1500.jsonl
+        </code>{" "}
+        and up to the number of PDF résumés you set below (default{" "}
+        {SEED_DEFAULT_MAX_CV_FILES}, max {SEED_MAX_CV_FILES_CAP}) from the
+        public curriculum_vitae_data repo with AI metadata per file (Bedrock
+        preferred, else Gemini; slow and many model calls).{" "}
+        <code className="rounded bg-amber-100/80 px-1 dark:bg-amber-950">
+          evaluations/
+        </code>{" "}
+        is not cleared.
+      </p>
+      {open ? (
+        <div className="mt-4 space-y-3 border-t border-amber-200/80 pt-4 dark:border-amber-800/60">
+          <label className="block text-xs font-medium text-amber-950 dark:text-amber-100">
+            Number of CV PDFs to import
+            <input
+              type="number"
+              inputMode="numeric"
+              min={1}
+              max={SEED_MAX_CV_FILES_CAP}
+              step={1}
+              value={maxCvFilesInput}
+              onChange={(e) => setMaxCvFilesInput(e.target.value)}
+              disabled={busy}
+              className="mt-1 w-full max-w-[12rem] rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm text-zinc-900 dark:border-amber-800 dark:bg-zinc-950 dark:text-zinc-100"
+            />
+            <span className="mt-1 block font-normal text-amber-800/90 dark:text-amber-200/80">
+              1–{SEED_MAX_CV_FILES_CAP} (default {SEED_DEFAULT_MAX_CV_FILES}).
+            </span>
+          </label>
+          <label className="block text-xs font-medium text-amber-950 dark:text-amber-100">
+            Type <code className="font-mono">DELETE</code> to confirm
+            <input
+              type="text"
+              autoComplete="off"
+              value={confirmText}
+              onChange={(e) => setConfirmText(e.target.value)}
+              disabled={busy}
+              className="mt-1 w-full max-w-md rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm text-zinc-900 dark:border-amber-800 dark:bg-zinc-950 dark:text-zinc-100"
+            />
+          </label>
+          <button
+            type="button"
+            disabled={!canRun}
+            onClick={() => void runSeed()}
+            className="rounded-lg bg-red-700 px-4 py-2 text-sm font-medium text-white hover:bg-red-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-red-800 dark:hover:bg-red-700"
+          >
+            {busy ? "Seeding…" : "Run seed"}
+          </button>
+          {banner ? (
+            <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/50 dark:text-red-200">
+              {banner}
+            </p>
+          ) : null}
+          {log.length > 0 ? (
+            <div
+              className="max-h-48 overflow-y-auto rounded-lg border border-amber-200/80 bg-white/90 p-2 font-mono text-[11px] text-zinc-800 dark:border-amber-900 dark:bg-zinc-950 dark:text-zinc-300"
+              aria-live="polite"
+            >
+              {log.map((line, i) => (
+                <div key={i}>{line}</div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 export function CvsClient() {
@@ -223,8 +453,17 @@ export function CvsClient() {
           <code className="rounded bg-zinc-100 px-1 text-xs dark:bg-zinc-900">
             npm run seed:jds
           </code>
-          .
+          , or use{" "}
+          <strong className="font-medium text-zinc-800 dark:text-zinc-200">
+            Seed full dataset
+          </strong>{" "}
+          below (confirm with{" "}
+          <code className="rounded bg-zinc-100 px-1 text-xs dark:bg-zinc-900">
+            DELETE
+          </code>
+          ).
         </p>
+        <SeedDatasetPanel load={load} />
       </div>
 
       <label className="flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-zinc-300 bg-zinc-50 px-4 py-6 transition hover:border-zinc-400 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900/40 dark:hover:border-zinc-600 lg:py-5">

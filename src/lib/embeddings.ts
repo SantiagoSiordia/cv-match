@@ -7,9 +7,18 @@ import {
 } from "@/lib/constants";
 import {
   BedrockConfigError,
-  generateTopMatchJustifications,
   getBedrockRuntimeClient,
 } from "@/lib/bedrock";
+import {
+  getAiProviderMode,
+  generateTopMatchJustificationsWithProvider,
+  isBedrockFailureEligibleForFallback,
+} from "@/lib/aiProvider";
+import {
+  embedTextWithGemini,
+  getGeminiEmbeddingModelId,
+  hasGeminiApiKey,
+} from "@/lib/gemini";
 import { embeddingsDir, jobEmbeddingIndexPath } from "@/lib/paths";
 import {
   getCvMeta,
@@ -25,11 +34,33 @@ export class EmbeddingApiError extends Error {
   }
 }
 
+let lockedEmbedBackend: "bedrock" | "gemini" | null = null;
+
+/** @internal */
+export function resetEmbeddingBackendLockForTests() {
+  lockedEmbedBackend = null;
+}
+
 function embeddingModelId(): string {
   return (
     process.env.BEDROCK_EMBEDDING_MODEL_ID?.trim() ||
     DEFAULT_BEDROCK_EMBEDDING_MODEL
   );
+}
+
+function bedrockIndexKey(dim: number): string {
+  return `b:${encodeURIComponent(embeddingModelId())}:${dim}`;
+}
+
+function geminiIndexKey(dim: number): string {
+  return `g:${encodeURIComponent(getGeminiEmbeddingModelId())}:${dim}`;
+}
+
+/** Migrate legacy index `model` (raw Bedrock id) to keyed form. */
+function normalizeStoredIndexModel(stored: string): string {
+  if (!stored) return bedrockIndexKey(1024);
+  if (stored.startsWith("b:") || stored.startsWith("g:")) return stored;
+  return `b:${encodeURIComponent(stored)}:1024`;
 }
 
 function truncateForEmbedding(text: string): string {
@@ -85,8 +116,18 @@ type JobIndexFile = {
   entries: Record<string, JobIndexEntry>;
 };
 
-/** Concurrent Titan invokes per wave to balance throughput vs throttling. */
+/** Concurrent embedding API calls per wave. */
 const EMBED_CONCURRENCY = 12;
+
+function embeddingFallbackEligible(e: unknown): boolean {
+  if (e instanceof BedrockConfigError) return true;
+  if (e instanceof EmbeddingApiError) {
+    return /credentials|Credential|AccessDenied|Unauthorized|InvalidClientTokenId|ExpiredToken|security token|Could not load credentials|EC2MetadataError|not authorized|Access Denied|Bedrock invocation failed|Embedding failed/i.test(
+      e.message,
+    );
+  }
+  return isBedrockFailureEligibleForFallback(e);
+}
 
 async function invokeTitanEmbedding(inputText: string): Promise<number[]> {
   let client;
@@ -131,6 +172,56 @@ async function invokeTitanEmbedding(inputText: string): Promise<number[]> {
   }
 }
 
+async function invokeEmbeddingVector(inputText: string): Promise<number[]> {
+  async function viaBedrock(): Promise<number[]> {
+    const v = await invokeTitanEmbedding(inputText);
+    lockedEmbedBackend = "bedrock";
+    return v;
+  }
+
+  async function viaGemini(): Promise<number[]> {
+    const v = await embedTextWithGemini(inputText);
+    lockedEmbedBackend = "gemini";
+    return v;
+  }
+
+  if (lockedEmbedBackend === "bedrock") return viaBedrock();
+  if (lockedEmbedBackend === "gemini") return viaGemini();
+
+  const mode = getAiProviderMode();
+  if (mode === "gemini") return viaGemini();
+  if (mode === "bedrock") return viaBedrock();
+
+  const region =
+    process.env.AWS_REGION?.trim() || process.env.AWS_DEFAULT_REGION?.trim();
+  if (!region) {
+    if (!hasGeminiApiKey()) {
+      throw new EmbeddingApiError(
+        "Set AWS_REGION for Bedrock embeddings or GEMINI_API_KEY for Gemini embeddings.",
+      );
+    }
+    return viaGemini();
+  }
+
+  try {
+    return await viaBedrock();
+  } catch (e) {
+    if (!embeddingFallbackEligible(e) || !hasGeminiApiKey()) {
+      if (e instanceof EmbeddingApiError || e instanceof BedrockConfigError) {
+        throw e;
+      }
+      throw new EmbeddingApiError(e instanceof Error ? e.message : String(e));
+    }
+    return viaGemini();
+  }
+}
+
+function indexKeyForVector(values: number[]): string {
+  const dim = values.length;
+  if (dim === 1024) return bedrockIndexKey(dim);
+  return geminiIndexKey(dim);
+}
+
 async function embedContentSingle(
   text: string,
   taskType: "RETRIEVAL_QUERY" | "RETRIEVAL_DOCUMENT",
@@ -140,7 +231,7 @@ async function embedContentSingle(
     taskType === "RETRIEVAL_DOCUMENT"
       ? documentEmbeddingInput(text, title)
       : truncateForEmbedding(text);
-  return invokeTitanEmbedding(input);
+  return invokeEmbeddingVector(input);
 }
 
 async function batchEmbedContents(
@@ -174,12 +265,15 @@ async function loadJobIndex(): Promise<JobIndexFile> {
       parsed.entries &&
       typeof parsed.entries === "object"
     ) {
-      return parsed;
+      return {
+        model: normalizeStoredIndexModel(parsed.model),
+        entries: parsed.entries,
+      };
     }
   } catch {
     /* missing or invalid */
   }
-  return { model: embeddingModelId(), entries: {} };
+  return { model: bedrockIndexKey(1024), entries: {} };
 }
 
 async function saveJobIndex(index: JobIndexFile): Promise<void> {
@@ -189,15 +283,11 @@ async function saveJobIndex(index: JobIndexFile): Promise<void> {
 
 /**
  * Ensures on-disk vectors exist for every job with extractable text.
- * Invalidates entries when JD text changes (SHA-256 fingerprint).
+ * Invalidates entries when JD text changes (SHA-256 fingerprint) or embedding backend/dim changes.
  */
 export async function ensureJobEmbeddingIndex(): Promise<JobIndexFile> {
   const jobs = await listJobDescriptions();
   let index = await loadJobIndex();
-  const model = embeddingModelId();
-  if (index.model !== model) {
-    index = { model, entries: {} };
-  }
 
   const toEmbed: Array<{
     id: string;
@@ -231,6 +321,13 @@ export async function ensureJobEmbeddingIndex(): Promise<JobIndexFile> {
         title: c.title,
       })),
     );
+    const key = indexKeyForVector(vectors[0]!);
+    if (index.model !== key) {
+      lockedEmbedBackend = null;
+      index = { model: key, entries: {} };
+      await saveJobIndex(index);
+      return ensureJobEmbeddingIndex();
+    }
     for (let j = 0; j < chunk.length; j++) {
       const c = chunk[j]!;
       index.entries[c.id] = {
@@ -305,6 +402,17 @@ export async function rankCvAgainstJobs(cvId: string): Promise<JobMatchRow[]> {
       });
       continue;
     }
+    if (entry.values.length !== cvVec.length) {
+      rows.push({
+        jobDescriptionId: job.id,
+        title,
+        scorePercent: 0,
+        cosineSimilarity: 0,
+        skipped: true,
+        skipReason: "embedding_dimension_mismatch",
+      });
+      continue;
+    }
     const sim = cosineSimilarity(cvVec, entry.values);
     rows.push({
       jobDescriptionId: job.id,
@@ -348,7 +456,10 @@ export async function enrichTopMatchJustifications(
     const withText = payloads.filter((p) => p.jdText.trim());
     if (withText.length === 0) return rows;
 
-    const map = await generateTopMatchJustifications(cvText, withText);
+    const map = await generateTopMatchJustificationsWithProvider(
+      cvText,
+      withText,
+    );
 
     return rows.map((row) => {
       const justification = map.get(row.jobDescriptionId);

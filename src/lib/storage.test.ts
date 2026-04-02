@@ -11,28 +11,34 @@ vi.mock("@/lib/extractText", () => ({
   extractTextFromPlainBuffer: (b: Buffer) => b.toString("utf8"),
 }));
 
-vi.mock("@/lib/bedrock", () => ({
-  BedrockConfigError: class BedrockConfigError extends Error {},
-  extractCvMetadataWithBedrock: vi.fn(async () => ({
+vi.mock("@/lib/aiProvider", () => ({
+  AiProviderConfigError: class AiProviderConfigError extends Error {},
+  GeminiConfigError: class GeminiConfigError extends Error {},
+  extractCvMetadataWithProvider: vi.fn(async () => ({
     name: "Test Candidate",
     skills: ["Testing"],
     experienceSummary: "Several years of testing.",
   })),
-  guessJobTitleWithBedrock: vi.fn(async () => "QA Engineer"),
+  guessJobTitleWithProvider: vi.fn(async () => "QA Engineer"),
 }));
 
 describe("storage (isolated cwd)", () => {
   let prevCwd: string;
   let tempDir: string;
+  let prevAwsRegion: string | undefined;
 
   beforeEach(async () => {
     prevCwd = process.cwd();
+    prevAwsRegion = process.env.AWS_REGION;
     tempDir = await mkdtemp(path.join(tmpdir(), "cv-match-test-"));
     process.chdir(tempDir);
+    process.env.AWS_REGION = "us-east-1";
   });
 
   afterEach(() => {
     process.chdir(prevCwd);
+    if (prevAwsRegion === undefined) delete process.env.AWS_REGION;
+    else process.env.AWS_REGION = prevAwsRegion;
   });
 
   it("saves a CV PDF and writes meta + extracted sidecar", async () => {

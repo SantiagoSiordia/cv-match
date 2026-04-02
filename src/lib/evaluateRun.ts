@@ -1,7 +1,8 @@
+import { BedrockConfigError } from "@/lib/bedrock";
 import {
-  evaluateCompatibilityWithBedrock,
-  BedrockConfigError,
-} from "@/lib/bedrock";
+  evaluateCompatibilityWithProvider,
+  isAiProviderConfigError,
+} from "@/lib/aiProvider";
 import { saveEvaluationRun } from "@/lib/evaluationsStore";
 import {
   getCvMeta,
@@ -67,15 +68,16 @@ export async function runEvaluation(input: EvaluateInput) {
       continue;
     }
     try {
-      const result = await evaluateCompatibilityWithBedrock(jobText, cvText);
+      const result = await evaluateCompatibilityWithProvider(jobText, cvText);
       results.push({
         cvId,
         cvOriginalName: cvMeta.originalName,
         result,
       });
     } catch (e) {
-      if (e instanceof BedrockConfigError) {
-        throw new EvaluateError("BEDROCK_CONFIG", e.message, 500);
+      if (isAiProviderConfigError(e) || e instanceof BedrockConfigError) {
+        const msg = e instanceof Error ? e.message : String(e);
+        throw new EvaluateError("AI_CONFIG", msg, 500);
       }
       const msg = e instanceof Error ? e.message : "Evaluation failed";
       results.push({

@@ -11,11 +11,12 @@ import {
 } from "@/lib/paths";
 import { extractTextFromPdf, extractTextFromPlainBuffer } from "@/lib/extractText";
 import {
-  extractCvMetadataWithBedrock,
-  guessCvTitleWithBedrock,
-  guessJobTitleWithBedrock,
-  BedrockConfigError,
-} from "@/lib/bedrock";
+  AiProviderConfigError,
+  extractCvMetadataWithProvider,
+  GeminiConfigError,
+  guessCvTitleWithProvider,
+  guessJobTitleWithProvider,
+} from "@/lib/aiProvider";
 import { buildCvSearchIndex } from "@/lib/cvSearchIndex";
 import { buildJobSearchIndex } from "@/lib/jobSearchIndex";
 import type { CvStoredMeta, JobStoredMeta } from "@/lib/schemas";
@@ -69,7 +70,7 @@ function assertSize(size: number) {
 }
 
 /**
- * Persist a CV PDF with extracted text and optional Bedrock metadata.
+ * Persist a CV PDF with extracted text and optional LLM metadata (Bedrock preferred, Gemini fallback).
  * Use `skipAi: true` for bulk imports to avoid API cost/latency.
  */
 export async function persistCvPdf(
@@ -103,10 +104,13 @@ export async function persistCvPdf(
   if (!skipAi) {
     if (extracted.length > 0) {
       try {
-        gemini = await extractCvMetadataWithBedrock(extracted);
+        gemini = await extractCvMetadataWithProvider(extracted);
       } catch (e) {
         gemini = null;
-        if (e instanceof BedrockConfigError) {
+        if (
+          e instanceof AiProviderConfigError ||
+          e instanceof GeminiConfigError
+        ) {
           geminiError = e.message;
         } else if (e instanceof Error) {
           geminiError = e.message;
@@ -209,8 +213,9 @@ function cvNeedsGeminiBackfill(meta: CvStoredMeta): boolean {
 /**
  * Before job matching: backfill LLM metadata (name, title, skills, summary) when
  * incomplete, then infer title if still missing. Updates `searchIndex`. Re-throws
- * `BedrockConfigError` when Bedrock is not configured. On extraction failure with no
- * prior gemini blob, sets `geminiError` and still returns meta for the match to proceed.
+ * `AiProviderConfigError` / `GeminiConfigError` when no LLM provider is available.
+ * On extraction failure with no prior gemini blob, sets `geminiError` and still returns
+ * meta for the match to proceed.
  */
 export async function prepareCvForMatch(cvId: string): Promise<CvStoredMeta | null> {
   const meta = await getCvMeta(cvId);
@@ -225,11 +230,11 @@ export async function prepareCvForMatch(cvId: string): Promise<CvStoredMeta | nu
 
   if (cvNeedsGeminiBackfill(meta)) {
     try {
-      gemini = await extractCvMetadataWithBedrock(text);
+      gemini = await extractCvMetadataWithProvider(text);
       geminiError = undefined;
       changed = true;
     } catch (e) {
-      if (e instanceof BedrockConfigError) {
+      if (e instanceof AiProviderConfigError || e instanceof GeminiConfigError) {
         throw e;
       }
       if (!meta.gemini) {
@@ -245,7 +250,7 @@ export async function prepareCvForMatch(cvId: string): Promise<CvStoredMeta | nu
 
   if (gemini && !gemini.title?.trim()) {
     try {
-      const title = await guessCvTitleWithBedrock(text);
+      const title = await guessCvTitleWithProvider(text);
       if (title?.trim()) {
         gemini = { ...gemini, title: title.trim() };
         changed = true;
@@ -301,6 +306,15 @@ export async function deleteCv(id: string): Promise<boolean> {
   return true;
 }
 
+export async function deleteAllCvs(): Promise<number> {
+  const items = await listCvs();
+  let n = 0;
+  for (const c of items) {
+    if (await deleteCv(c.id)) n++;
+  }
+  return n;
+}
+
 function isPdfMime(mime: string, name: string) {
   const m = mime.toLowerCase();
   if (m === "application/pdf") return true;
@@ -314,7 +328,7 @@ function isTextMime(mime: string, name: string) {
 }
 
 export type PersistJobDescriptionOptions = {
-  /** When true, do not call Bedrock for title; use `explicitTitleGuess` or null. */
+  /** When true, do not call the LLM for title; use `explicitTitleGuess` or null. */
   skipTitleInference?: boolean;
   /** Used when `skipTitleInference` is true (e.g. bulk seed title). */
   explicitTitleGuess?: string | null;
@@ -366,9 +380,9 @@ export async function persistJobDescriptionFromBuffer(
     }
   } else if (extracted.length > 0) {
     try {
-      titleGuess = await guessJobTitleWithBedrock(extracted);
+      titleGuess = await guessJobTitleWithProvider(extracted);
     } catch (e) {
-      if (e instanceof BedrockConfigError) {
+      if (e instanceof AiProviderConfigError || e instanceof GeminiConfigError) {
         geminiError = e.message;
       } else if (e instanceof Error) {
         geminiError = e.message;
@@ -498,6 +512,15 @@ export async function deleteJobDescription(id: string): Promise<boolean> {
     }
   }
   return true;
+}
+
+export async function deleteAllJobDescriptions(): Promise<number> {
+  const items = await listJobDescriptions();
+  let n = 0;
+  for (const j of items) {
+    if (await deleteJobDescription(j.id)) n++;
+  }
+  return n;
 }
 
 export async function saveJobDescriptionFromText(

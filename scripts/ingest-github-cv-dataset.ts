@@ -11,11 +11,12 @@
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import {
+  curriculumVitaeDatasetRawUrl,
+  fetchCurriculumVitaeDatasetTree,
+  listPdfPathsInDatasetTree,
+} from "../src/lib/githubCvDataset";
 import { persistCvPdf } from "../src/lib/storage";
-
-const OWNER = "arefinnomi";
-const REPO = "curriculum_vitae_data";
-const BRANCH = "master";
 
 function loadDotEnv() {
   const envPath = path.join(process.cwd(), ".env");
@@ -41,27 +42,6 @@ function loadDotEnv() {
   }
 }
 
-type TreeEntry = { path: string; type: string; size?: number };
-
-async function fetchTree(): Promise<TreeEntry[]> {
-  const url = `https://api.github.com/repos/${OWNER}/${REPO}/git/trees/${BRANCH}?recursive=1`;
-  const res = await fetch(url, {
-    headers: {
-      Accept: "application/vnd.github+json",
-      "User-Agent": "cv-match-ingest",
-    },
-  });
-  if (!res.ok) {
-    throw new Error(`GitHub tree API ${res.status}: ${await res.text()}`);
-  }
-  const data = (await res.json()) as { tree: TreeEntry[] };
-  return data.tree;
-}
-
-function rawUrl(filePath: string) {
-  return `https://raw.githubusercontent.com/${OWNER}/${REPO}/${BRANCH}/${filePath}`;
-}
-
 async function main() {
   loadDotEnv();
   const skipAi =
@@ -82,16 +62,8 @@ async function main() {
   }
   console.log(`Concurrency: ${conc}`);
 
-  const tree = await fetchTree();
-  const pdfPaths = tree
-    .filter(
-      (e) =>
-        e.type === "blob" &&
-        e.path.startsWith("pdf/") &&
-        e.path.toLowerCase().endsWith(".pdf"),
-    )
-    .map((e) => e.path)
-    .sort();
+  const tree = await fetchCurriculumVitaeDatasetTree();
+  const pdfPaths = listPdfPathsInDatasetTree(tree);
 
   const targets =
     Number.isFinite(maxFiles) && maxFiles > 0
@@ -113,7 +85,7 @@ async function main() {
       const p = targets[i];
       const name = path.basename(p);
       try {
-        const res = await fetch(rawUrl(p), {
+        const res = await fetch(curriculumVitaeDatasetRawUrl(p), {
           headers: { "User-Agent": "cv-match-ingest" },
         });
         if (!res.ok) {

@@ -1,6 +1,6 @@
 # CV Match
 
-Web app to **upload CVs (PDF)** and **job descriptions** (PDF or text), then **score candidates against a role** using **[Amazon Bedrock](https://aws.amazon.com/bedrock/)** (Claude for structured scoring and text, Titan for embeddings). Results are stored on disk as JSON so you can compare runs over time.
+Web app to **upload CVs (PDF)** and **job descriptions** (PDF or text), then **score candidates against a role** using **AI on the server** — **[Amazon Bedrock](https://aws.amazon.com/bedrock/)** when configured (Claude + Titan embeddings), or **[Google Gemini](https://ai.google.dev/)** as fallback or standalone (Flash-Lite + text embeddings). Results are stored on disk as JSON so you can compare runs over time.
 
 Product goals and features are summarized in [PRD.md](./PRD.md).
 
@@ -12,7 +12,7 @@ Product goals and features are summarized in [PRD.md](./PRD.md).
 |-------------|--------|
 | **Node.js** | **20.x or newer** (LTS recommended). [nodejs.org](https://nodejs.org/) |
 | **npm** | Ships with Node; this repo uses `package-lock.json`. |
-| **AWS credentials** | For local dev: configure the [default credential chain](https://docs.aws.amazon.com/sdk-for-javascript/v3/developer-guide/setting-credentials-node.html) (e.g. `aws configure`, environment variables, or SSO). The app calls Bedrock only from the server. |
+| **AWS credentials** | Optional if you use **Gemini** only: configure the [default credential chain](https://docs.aws.amazon.com/sdk-for-javascript/v3/developer-guide/setting-credentials-node.html) when using **Amazon Bedrock** (preferred when configured). The app calls AI APIs only from the server. |
 
 Optional:
 
@@ -40,17 +40,14 @@ Create a `.env` file in the project root (same folder as `package.json`):
 cp .env.example .env
 ```
 
-Edit `.env` and set at least:
+Configure **at least one** AI backend (see [`.env.example`](.env.example)):
+
+- **Amazon Bedrock (default when available):** set `AWS_REGION` and valid AWS credentials. Optional: `BEDROCK_TEXT_MODEL_ID`, `BEDROCK_EMBEDDING_MODEL_ID` (defaults in [`src/lib/constants.ts`](src/lib/constants.ts)).
+- **Google Gemini (fallback or standalone):** set `GEMINI_API_KEY`. With **`AI_PROVIDER=auto`** (the default), the app tries Bedrock first and uses Gemini when Bedrock is not configured or returns credential/access errors. Set **`AI_PROVIDER=gemini`** to use only Gemini (e.g. local dev without AWS keys). Cheapest defaults are **`gemini-2.5-flash-lite`** for text and **`text-embedding-004`** for embeddings (override with `GEMINI_TEXT_MODEL` / `GEMINI_EMBEDDING_MODEL`). Transient **503 / rate limits** are retried with backoff (**`GEMINI_MAX_RETRIES`**, default 5). If Flash-Lite is often overloaded, try **`GEMINI_TEXT_MODEL=gemini-2.5-flash`** (slightly pricier, often more capacity).
 
 ```env
 AWS_REGION=us-east-1
-```
-
-Optional overrides (defaults are in [`src/lib/constants.ts`](src/lib/constants.ts)):
-
-```env
-BEDROCK_TEXT_MODEL_ID=anthropic.claude-3-5-haiku-20241022-v1:0
-BEDROCK_EMBEDDING_MODEL_ID=amazon.titan-embed-text-v2:0
+# GEMINI_API_KEY=your-key   # enables Gemini fallback or AI_PROVIDER=gemini
 ```
 
 For **Docker / ECS**, set **`CV_MATCH_DATA_ROOT`** to the mounted volume path (e.g. `/data`) so uploads and evaluations persist.
@@ -97,11 +94,21 @@ npm run generate:jds:50   # 50 rows → scripts/seed/tcs-jds-50.jsonl
 npm run generate:jds      # 1500 rows → scripts/seed/tcs-jds-1500.jsonl
 ```
 
+### Full seed (CVs + JDs, destructive)
+
+To **replace** everything in `cvs-*` and `job-descriptions/` with the TCS JSONL corpus **and** up to **1500** résumé PDFs from [curriculum_vitae_data](https://github.com/arefinnomi/curriculum_vitae_data) (with **LLM metadata per CV**, same as uploading each PDF by hand — Bedrock preferred, Gemini if Bedrock is unavailable):
+
+1. Run **`npm run seed:full`** from the project root (optional: **`npm run seed:full -- 50`** to import only 50 CVs), or open **`/cvs`** and use **Seed full dataset** (set the CV count, then type `DELETE` to confirm). The HTTP API expects **`POST /api/admin/seed`** with JSON **`{ "confirm": "DELETE", "maxCvFiles"?: number }`** (omit `maxCvFiles` for the default of 1500; max 5000).
+
+The HTTP route uses a long **`maxDuration`** (1 hour), but reverse proxies or serverless limits may still cut the connection off—**CLI is the most reliable** for the full 1500 CVs. **`evaluations/`** is not deleted by this flow; old runs may reference removed CVs until you delete those runs in the UI.
+
+There is **no separate admin secret**: confirmation is only the `DELETE` keyword in the UI or JSON body. Restrict network access (VPN, firewall, auth proxy) if the app is exposed beyond trusted users.
+
 ---
 
 ## Deploy locally
 
-Run the app on your machine. Complete [Setup](#setup) first (including `.env` with `AWS_REGION` and a way to call Bedrock—see [AWS credentials](https://docs.aws.amazon.com/sdk-for-javascript/v3/developer-guide/setting-credentials-node.html)). Enable the models you use under **Amazon Bedrock → Model access** in the AWS console.
+Run the app on your machine. Complete [Setup](#setup) first (including `.env` with Bedrock **or** Gemini as in [Environment variables](#2-environment-variables)). If you use Bedrock, enable the models under **Amazon Bedrock → Model access** in the AWS console and configure [AWS credentials](https://docs.aws.amazon.com/sdk-for-javascript/v3/developer-guide/setting-credentials-node.html).
 
 ### Development server (hot reload)
 
