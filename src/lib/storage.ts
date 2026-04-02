@@ -20,7 +20,7 @@ import {
 } from "@/lib/aiProvider";
 import { buildCvSearchIndex } from "@/lib/cvSearchIndex";
 import { buildJobSearchIndex } from "@/lib/jobSearchIndex";
-import type { CvStoredMeta, JobStoredMeta } from "@/lib/schemas";
+import { cvGeminiMetaSchema, type CvStoredMeta, type JobStoredMeta } from "@/lib/schemas";
 
 export class StorageError extends Error {
   constructor(
@@ -157,6 +157,13 @@ export async function saveCvFromFile(file: File): Promise<CvStoredMeta> {
   return persistCvPdf(buffer, file.name || "cv.pdf", { skipAi: false });
 }
 
+function coerceGeminiOnMeta(meta: CvStoredMeta): CvStoredMeta {
+  if (!meta.gemini) return meta;
+  const r = cvGeminiMetaSchema.safeParse(meta.gemini);
+  if (!r.success) return meta;
+  return { ...meta, gemini: r.data };
+}
+
 export async function listCvs(): Promise<CvStoredMeta[]> {
   await initStorageDirs();
   const names = await readdir(cvsMetaDir());
@@ -167,7 +174,7 @@ export async function listCvs(): Promise<CvStoredMeta[]> {
     try {
       const raw = await readFile(full, "utf8");
       const parsed = JSON.parse(raw) as CvStoredMeta;
-      if (parsed.type === "cv") metas.push(parsed);
+      if (parsed.type === "cv") metas.push(coerceGeminiOnMeta(parsed));
     } catch {
       /* skip broken meta */
     }
@@ -184,7 +191,8 @@ export async function getCvMeta(id: string): Promise<CvStoredMeta | null> {
   try {
     const raw = await readFile(cvMetaFile(id), "utf8");
     const parsed = JSON.parse(raw) as CvStoredMeta;
-    return parsed.type === "cv" ? parsed : null;
+    if (parsed.type !== "cv") return null;
+    return coerceGeminiOnMeta(parsed);
   } catch {
     return null;
   }
@@ -203,17 +211,20 @@ export async function readCvExtractedText(id: string): Promise<string | null> {
 /** True when we should run full LLM extraction (missing or thin metadata). */
 function cvNeedsGeminiBackfill(meta: CvStoredMeta): boolean {
   if (!meta.gemini) return true;
-  const g = meta.gemini;
-  const hasIdentity = !!(g.name?.trim() || g.title?.trim());
+  const parsed = cvGeminiMetaSchema.safeParse(meta.gemini);
+  const g = parsed.success ? parsed.data : null;
+  if (!g) return true;
+  const hasIdentity = !!(g.name.trim() || g.currentPosition.trim());
   if (!hasIdentity) return true;
-  if (g.skills.length === 0) return true;
-  if (!g.experienceSummary?.trim()) return true;
+  if (g.hardSkills.length === 0) return true;
+  if (!g.experienceSummary.trim()) return true;
   return false;
 }
 
 /**
- * Before job matching: backfill LLM metadata (name, title, skills, summary) when
- * incomplete, then infer title if still missing. Updates `searchIndex`. Re-throws
+ * Before job matching: backfill LLM metadata (name, location, currentPosition,
+ * hardSkills, experienceSummary) when incomplete, then infer currentPosition if
+ * still missing. Updates `searchIndex`. Re-throws
  * `AiProviderConfigError` / `GeminiConfigError` when no LLM provider is available.
  * On extraction failure with no prior gemini blob, sets `geminiError` and still returns
  * meta for the match to proceed.
@@ -249,11 +260,11 @@ export async function prepareCvForMatch(cvId: string): Promise<CvStoredMeta | nu
     }
   }
 
-  if (gemini && !gemini.title?.trim()) {
+  if (gemini && !gemini.currentPosition.trim()) {
     try {
-      const title = await guessCvTitleWithProvider(text);
-      if (title?.trim()) {
-        gemini = { ...gemini, title: title.trim() };
+      const pos = await guessCvTitleWithProvider(text);
+      if (pos?.trim()) {
+        gemini = { ...gemini, currentPosition: pos.trim() };
         changed = true;
       }
     } catch {

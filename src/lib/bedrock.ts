@@ -134,14 +134,15 @@ export async function extractCvMetadataWithBedrock(
 ): Promise<CvGeminiMeta> {
   const prompt = `You extract structured data from a CV/resume text.
 
-Return ONLY JSON matching this shape:
-{"name": string|null, "title": string|null, "skills": string[], "experienceSummary": string|null}
+Return ONLY JSON with EXACTLY these keys (always present):
+{"name":"","location":"","currentPosition":"","hardSkills":[],"experienceSummary":""}
 
 Rules:
-- name: candidate full name if clearly stated, else null
-- title: current or primary professional role as written on the CV — a short job title or headline only (e.g. "Software Engineer", "Senior Game Developer", "Full Stack Developer"), typically 2–6 words. Infer from job headings or subtitle under the name if present; else null if unclear
-- skills: concise skill phrases (max ~25 items)
-- experienceSummary: 2-4 sentences on roles and seniority, else null
+- name: full name if clearly stated, else ""
+- location: current city, region, and/or country if stated (e.g. "Berlin, Germany"), else ""
+- currentPosition: current job title or professional headline only (2–8 words), e.g. "Software Engineer", "SAP Consultant". Use subtitle under the name or the most recent role if clearly current; else ""
+- hardSkills: technical / hard skills only — programming languages, frameworks, platforms, tools (e.g. "Java", "Python", "SAP", "AWS"). Omit soft skills. Max ~40 short tokens. Use [] if none found
+- experienceSummary: 2–4 sentences on roles and seniority, else ""
 
 CV text:
 ---
@@ -160,7 +161,7 @@ export async function guessCvTitleWithBedrock(
 ): Promise<string | null> {
   const prompt = `From this résumé/CV text, infer the candidate's current or primary professional role as a short job title or headline only (2–8 words), e.g. "Software Engineer", "Senior Game Developer". Use what appears under their name or the most recent role if that's clearly their focus. Return null only if you cannot infer.
 
-Return ONLY JSON: {"title": string|null}
+Return ONLY JSON: {"currentPosition": string|null} (legacy {"title": string|null} is also accepted)
 
 Résumé text:
 ---
@@ -169,9 +170,13 @@ ${truncateForPrompt(cvText, 24_000)}
 `;
 
   const text = await invokeClaudeJson(prompt);
-  const parsed = parseJsonObject<{ title?: string | null }>(text);
-  if (parsed.title === undefined || parsed.title === null) return null;
-  const t = String(parsed.title).trim();
+  const parsed = parseJsonObject<{
+    currentPosition?: string | null;
+    title?: string | null;
+  }>(text);
+  const raw = parsed.currentPosition ?? parsed.title;
+  if (raw === undefined || raw === null) return null;
+  const t = String(raw).trim();
   return t.length ? t : null;
 }
 

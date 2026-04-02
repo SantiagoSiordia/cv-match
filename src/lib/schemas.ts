@@ -1,13 +1,40 @@
 import { z } from "zod";
 
-export const cvGeminiMetaSchema = z.object({
-  name: z.string().nullable(),
-  /** Professional headline e.g. Software Engineer, Game Developer (optional for older extractions). */
-  title: z.string().nullable().optional(),
-  skills: z.array(z.string()),
-  experienceSummary: z.string().nullable(),
+/**
+ * Raw LLM / legacy disk shapes (`title` + `skills` are older keys). Parsed output is always
+ * {@link CvGeminiMeta} with empty strings / empty array when unknown.
+ */
+const cvGeminiMetaInputSchema = z.object({
+  name: z.union([z.string(), z.null()]).optional(),
+  location: z.union([z.string(), z.null()]).optional(),
+  currentPosition: z.union([z.string(), z.null()]).optional(),
+  /** @deprecated use currentPosition; still accepted from older extractions */
+  title: z.union([z.string(), z.null()]).optional(),
+  hardSkills: z.union([z.array(z.string()), z.null()]).optional(),
+  /** @deprecated use hardSkills; still accepted from older extractions */
+  skills: z.union([z.array(z.string()), z.null()]).optional(),
+  experienceSummary: z.union([z.string(), z.null()]).optional(),
 });
 
+export const cvGeminiMetaSchema = cvGeminiMetaInputSchema.transform((r) => {
+  const rawList = r.hardSkills ?? r.skills;
+  const list = Array.isArray(rawList)
+    ? rawList.flatMap((s) =>
+        typeof s === "string" && s.trim() ? [s.trim()] : [],
+      )
+    : [];
+  const pos = r.currentPosition ?? r.title;
+  return {
+    name: r.name == null ? "" : String(r.name).trim(),
+    location: r.location == null ? "" : String(r.location).trim(),
+    currentPosition: pos == null ? "" : String(pos).trim(),
+    hardSkills: list.slice(0, 40),
+    experienceSummary:
+      r.experienceSummary == null ? "" : String(r.experienceSummary).trim(),
+  };
+});
+
+/** Normalized résumé metadata: every field is always present; use "" / [] when not found. */
 export type CvGeminiMeta = z.infer<typeof cvGeminiMetaSchema>;
 
 export const compatibilityResultSchema = z.object({

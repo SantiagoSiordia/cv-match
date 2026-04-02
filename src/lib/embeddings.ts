@@ -441,7 +441,7 @@ export async function ensureCvEmbeddingIndex(): Promise<CvIndexFile> {
       continue;
     }
     const title =
-      cv.gemini?.title?.trim() ||
+      cv.gemini?.currentPosition?.trim() ||
       cv.originalName.replace(/\.[^.]+$/, "") ||
       "CV";
     toEmbed.push({ id: cv.id, text, title, fingerprint: fp });

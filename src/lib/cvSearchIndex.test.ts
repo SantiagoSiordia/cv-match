@@ -8,13 +8,15 @@ describe("buildCvSearchIndex", () => {
       "2025-03-01T12:00:00.000Z",
       {
         name: "Jane Doe",
-        title: "Software Engineer",
-        skills: ["Rust", "Kubernetes"],
+        location: "Berlin",
+        currentPosition: "Software Engineer",
+        hardSkills: ["Rust", "Kubernetes"],
         experienceSummary: "Built APIs.",
       },
       "Led platform work with Postgres and Terraform.",
     );
     expect(idx).toContain("jane doe");
+    expect(idx).toContain("berlin");
     expect(idx).toContain("software engineer");
     expect(idx).toContain("rust");
     expect(idx).toContain("postgres");

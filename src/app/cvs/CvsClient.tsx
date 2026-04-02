@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import type { CvStoredMeta } from "@/lib/schemas";
 import type { ApiCvList, ApiErrorBody } from "@/components/ApiTypes";
@@ -9,16 +9,6 @@ import {
   cvMatchesSearchQuery,
 } from "@/lib/cvSearchFilter";
 import { PreviewModal } from "@/components/PreviewModal";
-
-type JobMatchItem = {
-  jobDescriptionId: string;
-  title: string;
-  scorePercent: number;
-  cosineSimilarity: number;
-  skipped?: boolean;
-  skipReason?: string;
-  justification?: string;
-};
 
 /** YYYY-MM-DD in UTC — avoids hydration mismatches from `toLocaleDateString()`. */
 function formatUploadDate(iso: string): string {
@@ -82,25 +72,6 @@ function SearchIcon({ className }: { className?: string }) {
   );
 }
 
-function RankedJobsIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      <path d="M12 20V10" />
-      <path d="M18 20V4" />
-      <path d="M6 20v-4" />
-    </svg>
-  );
-}
-
 function Spinner({ className = "h-4 w-4" }: { className?: string }) {
   return (
     <svg
@@ -134,16 +105,7 @@ export function CvsClient() {
   const [uploading, setUploading] = useState(false);
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [previewText, setPreviewText] = useState<string | null>(null);
-  const [matchCvId, setMatchCvId] = useState<string | null>(null);
-  const [matchLoading, setMatchLoading] = useState(false);
-  const [matchItems, setMatchItems] = useState<JobMatchItem[] | null>(null);
-  const [matchLabel, setMatchLabel] = useState<string | null>(null);
-  const [matchError, setMatchError] = useState<string | null>(null);
   const [resumeQuery, setResumeQuery] = useState("");
-  const matchResultsRef = useRef<HTMLDivElement>(null);
-
-  const hasMatchActivity =
-    matchLoading || matchError !== null || matchItems !== null;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -168,21 +130,6 @@ export function CvsClient() {
   useEffect(() => {
     void load();
   }, [load]);
-
-  useEffect(() => {
-    if (matchLoading) return;
-    if (matchError === null && matchItems === null) return;
-    if (
-      typeof window !== "undefined" &&
-      window.matchMedia("(min-width: 1024px)").matches
-    ) {
-      return;
-    }
-    matchResultsRef.current?.scrollIntoView({
-      behavior: "smooth",
-      block: "nearest",
-    });
-  }, [matchLoading, matchItems, matchError]);
 
   async function onUpload(file: File) {
     setUploading(true);
@@ -222,42 +169,6 @@ export function CvsClient() {
     }
   }
 
-  async function onMatchJobs(cvId: string) {
-    setMatchCvId(cvId);
-    setMatchLoading(true);
-    setMatchError(null);
-    setMatchItems(null);
-    setMatchLabel(null);
-    try {
-      const res = await fetch(`/api/cvs/${cvId}/match-jobs`, {
-        method: "POST",
-      });
-      const json = (await res.json()) as
-        | {
-            ok: true;
-            data: {
-              items: JobMatchItem[];
-              label?: string;
-              cv: CvStoredMeta;
-            };
-          }
-        | ApiErrorBody;
-      if (!json.ok) {
-        setMatchError(json.error.message);
-        return;
-      }
-      setMatchItems(json.data.items);
-      setMatchLabel(json.data.label ?? null);
-      setItems((prev) =>
-        prev.map((c) => (c.id === json.data.cv.id ? json.data.cv : c)),
-      );
-    } catch {
-      setMatchError("Match request failed");
-    } finally {
-      setMatchLoading(false);
-    }
-  }
-
   async function openPreview(id: string) {
     setPreviewId(id);
     setPreviewText(null);
@@ -280,10 +191,6 @@ export function CvsClient() {
     ? items.find((i) => i.id === previewId)
     : undefined;
 
-  const activeMatchCv = matchCvId
-    ? items.find((c) => c.id === matchCvId)
-    : undefined;
-
   const filteredItems = useMemo(
     () => items.filter((cv) => cvMatchesSearchQuery(cv, resumeQuery)),
     [items, resumeQuery],
@@ -297,37 +204,38 @@ export function CvsClient() {
 
   return (
     <div className="min-h-[calc(100dvh-5rem)] bg-gradient-to-b from-zinc-100/90 via-white to-zinc-50/80 font-sans dark:from-zinc-950 dark:via-zinc-950 dark:to-zinc-950/95">
-      <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 sm:py-10">
-      <header className="mb-8">
+      <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 sm:py-10">
+      <header className="mb-8 text-center sm:text-left">
         <p className="text-xs font-semibold uppercase tracking-[0.08em] text-zinc-500 dark:text-zinc-400">
           Library
         </p>
         <h1 className="mt-1 text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
           CVs
         </h1>
-        <div className="mt-4 max-w-3xl rounded-2xl border border-zinc-200/80 bg-white/80 p-4 text-sm leading-relaxed text-zinc-600 shadow-sm backdrop-blur-sm dark:border-zinc-800 dark:bg-zinc-900/50 dark:text-zinc-300">
-          Upload PDFs to{" "}
-          <code className="rounded-md bg-zinc-100 px-1.5 py-0.5 font-mono text-[0.8rem] text-zinc-800 dark:bg-zinc-800 dark:text-zinc-200">
+        <p className="mx-auto mt-2 max-w-xl text-sm text-zinc-600 dark:text-zinc-400 sm:mx-0">
+          PDFs are stored under{" "}
+          <code className="rounded-md bg-zinc-200/80 px-1.5 py-0.5 font-mono text-[0.8rem] text-zinc-800 dark:bg-zinc-800 dark:text-zinc-200">
             cvs-pdf
           </code>
-          .{" "}
-          <strong className="font-medium text-zinc-800 dark:text-zinc-200">
-            Match to jobs
-          </strong>{" "}
-          ranks each résumé against all job descriptions (embedding similarity,
-          0–100%). On wide screens the report stays beside your list. Add roles
-          under{" "}
+          . Add job descriptions under{" "}
           <Link
             href="/job-descriptions"
             className="font-medium text-teal-700 underline decoration-teal-700/30 underline-offset-2 hover:decoration-teal-700 dark:text-teal-400 dark:decoration-teal-400/30"
           >
             Jobs
           </Link>
-          .
-        </div>
+          , then use{" "}
+          <Link
+            href="/analytics"
+            className="font-medium text-teal-700 underline decoration-teal-700/30 underline-offset-2 hover:decoration-teal-700 dark:text-teal-400 dark:decoration-teal-400/30"
+          >
+            Analytics
+          </Link>{" "}
+          for embedding views and bulk scoring.
+        </p>
       </header>
 
-      <div className="rounded-2xl border border-zinc-200/90 bg-white p-1 shadow-sm dark:border-zinc-800 dark:bg-zinc-950/80 dark:shadow-none">
+      <div className="rounded-2xl border border-zinc-200/90 bg-white p-1 shadow-md shadow-zinc-900/5 dark:border-zinc-800 dark:bg-zinc-950/80 dark:shadow-none">
         <label className="flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-zinc-200 bg-zinc-50/80 px-4 py-8 transition-colors hover:border-teal-400/60 hover:bg-teal-50/40 focus-within:outline-none focus-within:ring-2 focus-within:ring-teal-500/30 focus-within:ring-offset-2 focus-within:ring-offset-white dark:border-zinc-700 dark:bg-zinc-900/30 dark:hover:border-teal-600/50 dark:hover:bg-teal-950/20 dark:focus-within:ring-offset-zinc-950 lg:py-7">
           <PdfIcon className="mb-3 text-zinc-400 dark:text-zinc-500" />
           <span className="text-sm font-medium text-zinc-800 dark:text-zinc-200">
@@ -366,15 +274,16 @@ export function CvsClient() {
         </p>
       ) : null}
 
-      <div className="mt-10 grid grid-cols-1 gap-8 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)] lg:items-start lg:gap-10">
-        <aside
-          className={`flex min-h-[min(24rem,50vh)] min-w-0 flex-col gap-4 rounded-2xl border border-zinc-200/90 bg-white/90 p-4 shadow-sm backdrop-blur-sm dark:border-zinc-800 dark:bg-zinc-950/90 dark:shadow-none lg:max-h-[calc(100vh-7.5rem)] lg:min-h-0 lg:shrink-0 ${
-            hasMatchActivity ? "order-2 lg:order-none" : ""
-          }`}
-        >
-          <div className="flex shrink-0 flex-col gap-2">
-            <h2 className="text-xs font-semibold uppercase tracking-[0.08em] text-zinc-500 dark:text-zinc-400">
-              Résumés ({resumeCountLabel})
+      <section
+        className="mt-8 flex flex-col gap-5 rounded-2xl border border-zinc-200/90 bg-white/95 p-5 shadow-md shadow-zinc-900/5 backdrop-blur-sm dark:border-zinc-800 dark:bg-zinc-950/90 dark:shadow-none sm:p-6"
+        aria-labelledby="resume-list-heading"
+      >
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <h2
+              id="resume-list-heading"
+              className="text-xs font-semibold uppercase tracking-[0.08em] text-zinc-500 dark:text-zinc-400"
+            >
+              Your files ({resumeCountLabel})
             </h2>
             <div className="relative">
               <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400 dark:text-zinc-500" />
@@ -387,11 +296,11 @@ export function CvsClient() {
                 value={resumeQuery}
                 onChange={(e) => setResumeQuery(e.target.value)}
                 disabled={loading || items.length === 0}
-                className="w-full min-w-0 rounded-xl border border-zinc-200 bg-zinc-50/80 py-2.5 pl-9 pr-3 text-sm text-zinc-900 placeholder:text-zinc-400 transition-shadow focus:border-teal-500/40 focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-500/20 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900/60 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-teal-600/40 dark:focus:bg-zinc-950 dark:focus:ring-teal-500/15"
+                className="w-full min-w-0 rounded-xl border border-zinc-200 bg-zinc-50/80 py-2.5 pl-9 pr-3 text-sm text-zinc-900 placeholder:text-zinc-400 transition-shadow focus:border-teal-500/40 focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-500/20 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900/60 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-teal-600/40 dark:focus:bg-zinc-950 dark:focus:ring-teal-500/15 sm:max-w-xs"
               />
             </div>
           </div>
-          <div className="min-h-[12rem] min-w-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain pr-0.5 [scrollbar-gutter:stable] lg:min-h-0">
+          <div className="min-w-0">
             {loading ? (
               <ul className="space-y-3" aria-busy="true" aria-label="Loading résumés">
                 {[0, 1, 2].map((i) => (
@@ -428,20 +337,16 @@ export function CvsClient() {
                 </p>
               </div>
             ) : (
-              <ul className="space-y-3 pb-1">
+              <ul className="grid grid-cols-1 gap-3 pb-1 lg:grid-cols-2">
                 {filteredItems.map((cv) => {
-                  const displayName = cv.gemini?.name ?? cv.originalName;
-                  const isActiveMatch =
-                    matchCvId === cv.id &&
-                    (matchLoading || matchItems !== null);
+                  const displayName =
+                    cv.gemini?.name?.trim() ||
+                    cv.originalName.replace(/\.[^.]+$/, "").trim() ||
+                    cv.originalName;
                   return (
                   <li
                     key={cv.id}
-                    className={`rounded-xl border bg-white p-3 shadow-sm transition-[box-shadow,border-color] dark:bg-zinc-950/80 ${
-                      isActiveMatch
-                        ? "border-teal-400/50 ring-1 ring-teal-500/25 dark:border-teal-700/50 dark:ring-teal-400/20"
-                        : "border-zinc-200/90 dark:border-zinc-800"
-                    }`}
+                    className="rounded-xl border border-zinc-200/90 bg-white p-4 shadow-sm transition-shadow hover:shadow-md dark:border-zinc-800 dark:bg-zinc-950/80 dark:hover:border-zinc-700"
                   >
                     <div className="flex gap-3">
                       <div
@@ -454,17 +359,46 @@ export function CvsClient() {
                         <p className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-50">
                           {displayName}
                         </p>
-                        {cv.gemini?.title?.trim() ? (
-                          <p
-                            className="truncate text-xs font-medium text-zinc-600 dark:text-zinc-400"
-                            title={cv.gemini.title}
-                          >
-                            {cv.gemini.title}
-                          </p>
-                        ) : null}
                         <p className="mt-0.5 truncate text-[0.7rem] tabular-nums text-zinc-500 dark:text-zinc-500">
                           {formatUploadDate(cv.uploadedAt)}
                         </p>
+                        {cv.gemini ? (
+                          <dl className="mt-2 space-y-1 text-xs text-zinc-600 dark:text-zinc-400">
+                            <div className="flex gap-1.5">
+                              <dt className="shrink-0 font-medium text-zinc-500 dark:text-zinc-500">
+                                Location
+                              </dt>
+                              <dd className="min-w-0 truncate">
+                                {cv.gemini.location?.trim() || "—"}
+                              </dd>
+                            </div>
+                            <div className="flex gap-1.5">
+                              <dt className="shrink-0 font-medium text-zinc-500 dark:text-zinc-500">
+                                Position
+                              </dt>
+                              <dd className="min-w-0 truncate">
+                                {cv.gemini.currentPosition?.trim() || "—"}
+                              </dd>
+                            </div>
+                            <div className="flex gap-1.5">
+                              <dt className="shrink-0 font-medium text-zinc-500 dark:text-zinc-500">
+                                Skills
+                              </dt>
+                              <dd
+                                className="min-w-0 truncate"
+                                title={
+                                  cv.gemini.hardSkills?.length
+                                    ? cv.gemini.hardSkills.join(", ")
+                                    : undefined
+                                }
+                              >
+                                {cv.gemini.hardSkills?.length
+                                  ? cv.gemini.hardSkills.join(", ")
+                                  : "—"}
+                              </dd>
+                            </div>
+                          </dl>
+                        ) : null}
                         {cv.lowTextWarning ? (
                           <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
                             Low text extracted
@@ -475,56 +409,28 @@ export function CvsClient() {
                             AI: {cv.geminiError}
                           </p>
                         ) : null}
-                        {cv.gemini?.skills?.length ? (
-                          <p
-                            className="mt-1 truncate text-xs text-zinc-600 dark:text-zinc-400"
-                            title={cv.gemini.skills.join(", ")}
-                          >
-                            {cv.gemini.skills.slice(0, 8).join(", ")}
-                            {cv.gemini.skills.length > 8 ? "…" : ""}
-                          </p>
-                        ) : null}
                       </div>
                     </div>
-                    <div className="mt-3 flex flex-wrap gap-1.5 border-t border-zinc-100 pt-3 dark:border-zinc-800/80">
-                      <button
-                        type="button"
-                        disabled={matchLoading}
-                        onClick={() => void onMatchJobs(cv.id)}
-                        className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold text-white transition-colors disabled:opacity-50 ${
-                          matchCvId === cv.id && matchLoading
-                            ? "bg-teal-800 dark:bg-teal-600"
-                            : "bg-zinc-900 hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
-                        }`}
-                      >
-                        {matchLoading && matchCvId === cv.id ? (
-                          <span className="inline-flex items-center gap-1.5">
-                            <Spinner className="h-3.5 w-3.5" />
-                            Matching…
-                          </span>
-                        ) : (
-                          "Match"
-                        )}
-                      </button>
+                    <div className="mt-4 flex flex-wrap gap-2 border-t border-zinc-100 pt-4 dark:border-zinc-800/80">
                       <button
                         type="button"
                         onClick={() => void openPreview(cv.id)}
-                        className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900"
+                        className="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900"
                       >
-                        Text
+                        Extracted text
                       </button>
                       <a
                         href={`/api/cvs/${cv.id}/file`}
                         target="_blank"
                         rel="noreferrer"
-                        className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900"
+                        className="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900"
                       >
-                        PDF
+                        Open PDF
                       </a>
                       <button
                         type="button"
                         onClick={() => void onDelete(cv.id)}
-                        className="rounded-lg border border-red-200/90 bg-white px-2.5 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 dark:border-red-900/60 dark:bg-red-950/20 dark:text-red-300 dark:hover:bg-red-950/40"
+                        className="rounded-lg border border-red-200/90 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 dark:border-red-900/60 dark:bg-red-950/20 dark:text-red-300 dark:hover:bg-red-950/40"
                       >
                         Delete
                       </button>
@@ -535,192 +441,7 @@ export function CvsClient() {
               </ul>
             )}
           </div>
-        </aside>
-
-        <section
-          ref={matchResultsRef}
-          className={`min-h-[min(24rem,50vh)] min-w-0 lg:sticky lg:top-20 lg:min-h-[min(28rem,60vh)] lg:self-start ${
-            hasMatchActivity ? "order-1 lg:order-none" : ""
-          }`}
-        >
-          <h2 className="mb-3 text-xs font-semibold uppercase tracking-[0.08em] text-zinc-500 dark:text-zinc-400">
-            Match report
-          </h2>
-
-          <div className="flex min-h-[min(20rem,42vh)] flex-col lg:min-h-[min(24rem,52vh)]">
-          {matchLoading ? (
-            <div
-              className="rounded-2xl border border-teal-200/80 bg-gradient-to-br from-teal-50/90 to-white px-5 py-4 text-sm text-teal-950 shadow-sm dark:border-teal-900/50 dark:from-teal-950/35 dark:to-zinc-950 dark:text-teal-100"
-              role="status"
-              aria-live="polite"
-            >
-              <p className="flex items-center gap-2 font-semibold">
-                <Spinner className="h-4 w-4 text-teal-600 dark:text-teal-400" />
-                Computing matches…
-              </p>
-              <p className="mt-2 text-xs leading-relaxed text-teal-900/85 dark:text-teal-200/85">
-                Embedding this résumé and comparing it to every job. The first
-                run can take longer while job vectors are built.
-              </p>
-            </div>
-          ) : null}
-
-          {matchError ? (
-            <p
-              className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900/80 dark:bg-red-950/50 dark:text-red-200"
-              role="alert"
-            >
-              {matchError}
-            </p>
-          ) : null}
-
-          {matchItems !== null && matchCvId ? (
-            <div className="flex min-h-0 max-h-[min(75vh,calc(100vh-9rem))] flex-1 flex-col overflow-hidden rounded-2xl border border-zinc-200/90 bg-gradient-to-b from-white to-zinc-50/80 shadow-sm dark:border-zinc-700/80 dark:from-zinc-950 dark:to-zinc-950/90">
-              <div className="shrink-0 border-b border-zinc-200/80 bg-zinc-50/90 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900/50">
-                <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="text-[0.65rem] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
-                      Ranked for
-                    </p>
-                    <p className="mt-0.5 text-sm font-semibold leading-snug text-zinc-900 dark:text-zinc-50">
-                      {activeMatchCv?.gemini?.name ??
-                        activeMatchCv?.originalName}
-                    </p>
-                    {activeMatchCv?.gemini?.title?.trim() ? (
-                      <p className="mt-0.5 line-clamp-2 text-xs text-zinc-600 dark:text-zinc-400">
-                        {activeMatchCv.gemini.title}
-                      </p>
-                    ) : null}
-                  </div>
-                  {matchLabel ? (
-                    <span className="shrink-0 rounded-full border border-zinc-200 bg-white px-2.5 py-0.5 text-[0.65rem] font-medium text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
-                      {matchLabel}
-                    </span>
-                  ) : null}
-                </div>
-                <p className="mt-2 text-[0.7rem] leading-relaxed text-zinc-500 dark:text-zinc-400">
-                  Ordered by embedding similarity (best match first). The top
-                  three scored roles include a short AI note on why each %
-                  is plausible. Scroll the list below.
-                </p>
-              </div>
-              <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3">
-                {matchItems.length === 0 ? (
-                  <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                    No job descriptions. Add under{" "}
-                    <Link href="/job-descriptions" className="underline">
-                      Jobs
-                    </Link>
-                    .
-                  </p>
-                ) : (
-                  <ul className="space-y-2">
-                    {matchItems.slice(0, 50).map((row, idx) => {
-                      const rank = idx + 1;
-                      const topTier = rank <= 3 && !row.skipped;
-                      return (
-                        <li key={row.jobDescriptionId}>
-                          <div
-                            className={`flex gap-3 rounded-xl border px-3 py-2.5 transition-colors dark:bg-zinc-950/40 ${
-                              topTier
-                                ? "border-teal-200/90 bg-teal-50/50 dark:border-teal-900/50 dark:bg-teal-950/20"
-                                : "border-zinc-100 bg-white dark:border-zinc-800/90"
-                            }`}
-                          >
-                            <div
-                              className={`flex h-9 w-9 shrink-0 flex-col items-center justify-center rounded-lg text-xs font-bold tabular-nums ${
-                                topTier
-                                  ? "bg-teal-600 text-white dark:bg-teal-700"
-                                  : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400"
-                              }`}
-                              aria-hidden
-                            >
-                              {rank}
-                            </div>
-                            <div className="min-w-0 flex-1">
-                              <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
-                                <p
-                                  className="min-w-0 text-sm font-medium leading-snug text-zinc-900 dark:text-zinc-50"
-                                  title={row.title}
-                                >
-                                  <span className="sr-only">Rank {rank}: </span>
-                                  <span className="line-clamp-2">{row.title}</span>
-                                </p>
-                                <span
-                                  className={`shrink-0 tabular-nums text-sm font-semibold ${
-                                    row.skipped
-                                      ? "text-zinc-400 dark:text-zinc-500"
-                                      : "text-zinc-900 dark:text-zinc-100"
-                                  }`}
-                                >
-                                  {row.skipped ? "—" : `${row.scorePercent}%`}
-                                </span>
-                              </div>
-                              {row.skipped ? (
-                                <p className="mt-1 text-xs text-amber-700 dark:text-amber-400/90">
-                                  Skipped ({row.skipReason ?? "?"})
-                                </p>
-                              ) : (
-                                <>
-                                  <div
-                                    className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-zinc-200/90 dark:bg-zinc-800"
-                                    role="presentation"
-                                    aria-hidden
-                                  >
-                                    <div
-                                      className="h-full rounded-full bg-gradient-to-r from-teal-600 to-emerald-500 dark:from-teal-500 dark:to-emerald-400"
-                                      style={{
-                                        width: `${Math.min(100, Math.max(0, row.scorePercent))}%`,
-                                      }}
-                                    />
-                                  </div>
-                                  {row.justification ? (
-                                    <p className="mt-2 border-l-2 border-teal-300/80 pl-2.5 text-xs leading-relaxed text-zinc-600 dark:border-teal-700/80 dark:text-zinc-400">
-                                      {row.justification}
-                                    </p>
-                                  ) : null}
-                                </>
-                              )}
-                            </div>
-                            <div className="flex shrink-0 flex-col justify-center">
-                              <Link
-                                href={`/api/job-descriptions/${row.jobDescriptionId}/file`}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="rounded-lg border border-zinc-200 px-2 py-1 text-center text-xs font-medium text-zinc-800 transition hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800"
-                              >
-                                JD
-                              </Link>
-                            </div>
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-              </div>
-              {matchItems.length > 50 ? (
-                <p className="shrink-0 border-t border-zinc-100 bg-zinc-50/80 px-4 py-2 text-center text-xs text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/30">
-                  Showing top 50 of {matchItems.length} roles.
-                </p>
-              ) : null}
-            </div>
-          ) : !matchLoading ? (
-            <div className="flex flex-1 flex-col items-center justify-center rounded-2xl border border-dashed border-zinc-300/90 bg-gradient-to-b from-white to-zinc-50/90 px-6 py-12 text-center dark:border-zinc-700 dark:from-zinc-950/60 dark:to-zinc-950/90">
-              <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-zinc-100 text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400">
-                <RankedJobsIcon className="h-7 w-7" />
-              </div>
-              <p className="max-w-xs text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-                Select a résumé and click{" "}
-                <strong className="text-zinc-800 dark:text-zinc-200">Match</strong>{" "}
-                to see roles ranked by fit. On wide layouts this panel stays in
-                view beside the list.
-              </p>
-            </div>
-          ) : null}
-          </div>
-        </section>
-      </div>
+      </section>
 
       </div>
 

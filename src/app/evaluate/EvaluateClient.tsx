@@ -498,9 +498,11 @@ export function EvaluateClient() {
                         {filteredCvs.map((c) => {
                           const selected = !!selectedCv[c.id];
                           const displayName = (
-                            c.gemini?.name ?? c.originalName
+                            c.gemini?.name?.trim() ||
+                            c.originalName.replace(/\.[^.]+$/, "").trim() ||
+                            c.originalName
                           ).trim();
-                          const headline = c.gemini?.title?.trim();
+                          const headline = c.gemini?.currentPosition?.trim();
                           const initials = initialsFromDisplayName(displayName);
                           const dateStr = shortUploadDate(c.uploadedAt);
                           return (

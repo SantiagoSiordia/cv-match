@@ -28,8 +28,9 @@ describe("cvSearchFilter", () => {
     const cv = mockCv({
       gemini: {
         name: "Jane Doe",
-        title: "Staff Engineer",
-        skills: ["Go", "Kubernetes"],
+        location: "",
+        currentPosition: "Staff Engineer",
+        hardSkills: ["Go", "Kubernetes"],
         experienceSummary: "Led platform team.",
       },
     });

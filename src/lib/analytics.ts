@@ -157,7 +157,7 @@ export type AnalyticsOverview = {
 
 function cvSkillSet(cv: CvStoredMeta): Set<string> {
   const set = new Set<string>();
-  for (const s of cv.gemini?.skills ?? []) {
+  for (const s of cv.gemini?.hardSkills ?? []) {
     const k = normalizeSkillLabel(s);
     if (k.length) set.add(k);
   }

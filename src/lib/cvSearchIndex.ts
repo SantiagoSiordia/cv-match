@@ -28,9 +28,10 @@ export function buildCvSearchIndex(
     uploadedAtIso,
     uploadDateUtcYmd(uploadedAtIso),
     gemini?.name ?? "",
-    gemini?.title ?? "",
+    gemini?.location ?? "",
+    gemini?.currentPosition ?? "",
     gemini?.experienceSummary ?? "",
-    ...(gemini?.skills ?? []),
+    ...(gemini?.hardSkills ?? []),
     extractedText.slice(0, MAX_EXTRACT_CHARS),
   ];
   return parts
