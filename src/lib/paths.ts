@@ -47,3 +47,7 @@ export function embeddingsDir(): string {
 export function jobEmbeddingIndexPath(): string {
   return path.join(embeddingsDir(), "job-index.json");
 }
+
+export function cvEmbeddingIndexPath(): string {
+  return path.join(embeddingsDir(), "cv-index.json");
+}

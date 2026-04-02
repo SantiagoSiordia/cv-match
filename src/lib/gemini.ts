@@ -2,9 +2,11 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import {
   compatibilityResultSchema,
   cvGeminiMetaSchema,
+  jobSkillsExtractionSchema,
   topMatchJustificationsResponseSchema,
   type CompatibilityResult,
   type CvGeminiMeta,
+  type JobSkillsExtraction,
 } from "@/lib/schemas";
 import {
   DEFAULT_GEMINI_EMBEDDING_MODEL,
@@ -256,6 +258,26 @@ ${truncateForPrompt(jobText, 24_000)}
   return t.length ? t : null;
 }
 
+export async function extractJobSkillsWithGemini(
+  jobText: string,
+): Promise<JobSkillsExtraction> {
+  const prompt = `From the job description, list technical and professional skills, tools, frameworks, and domains that are required or strongly preferred for the role.
+
+Return ONLY JSON: {"skills": string[]}
+- At most ~30 concise phrases (e.g. "Python", "AWS", "Agile", "Customer success")
+- Include soft skills only if explicitly emphasized as requirements
+
+Job description:
+---
+${truncateForPrompt(jobText, 24_000)}
+---
+`;
+
+  const text = await generateJsonText(prompt);
+  const parsed = parseGeminiJsonText<unknown>(text);
+  return jobSkillsExtractionSchema.parse(parsed);
+}
+
 export async function evaluateCompatibilityWithGemini(
   jobDescriptionText: string,
   cvText: string,
@@ -348,17 +370,30 @@ ${blocks.join("\n\n")}
   return out;
 }
 
+/** Task types supported by `gemini-embedding-001` (embedContent). */
+export type GeminiEmbeddingTaskType =
+  | "RETRIEVAL_QUERY"
+  | "RETRIEVAL_DOCUMENT"
+  | "SEMANTIC_SIMILARITY";
+
 /**
  * Text embeddings via Gemini API (L2-normalized for cosine similarity).
+ * Pass `taskType` for asymmetric retrieval (query vs document); defaults to semantic similarity.
  */
-export async function embedTextWithGemini(inputText: string): Promise<number[]> {
+export async function embedTextWithGemini(
+  inputText: string,
+  options?: { taskType?: GeminiEmbeddingTaskType },
+): Promise<number[]> {
   const key = requireGeminiApiKey();
   const modelId = getGeminiEmbeddingModelId();
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:embedContent?key=${encodeURIComponent(key)}`;
-  const body = {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelId)}:embedContent?key=${encodeURIComponent(key)}`;
+  const body: Record<string, unknown> = {
     model: `models/${modelId}`,
     content: { parts: [{ text: truncateForEmbedding(inputText) }] },
   };
+  if (options?.taskType) {
+    body.taskType = options.taskType;
+  }
 
   return withGeminiRetries(async () => {
     const res = await fetch(url, {
@@ -376,8 +411,10 @@ export async function embedTextWithGemini(inputText: string): Promise<number[]> 
 
     const json = (await res.json()) as {
       embedding?: { values?: number[] };
+      embeddings?: Array<{ values?: number[] }>;
     };
-    const values = json.embedding?.values;
+    const values =
+      json.embedding?.values ?? json.embeddings?.[0]?.values;
     if (!values?.length) {
       throw new GeminiResponseError("Gemini embedding response missing values");
     }

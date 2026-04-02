@@ -43,7 +43,7 @@ cp .env.example .env
 Configure **at least one** AI backend (see [`.env.example`](.env.example)):
 
 - **Amazon Bedrock (default when available):** set `AWS_REGION` and valid AWS credentials. Optional: `BEDROCK_TEXT_MODEL_ID`, `BEDROCK_EMBEDDING_MODEL_ID` (defaults in [`src/lib/constants.ts`](src/lib/constants.ts)).
-- **Google Gemini (fallback or standalone):** set `GEMINI_API_KEY`. With **`AI_PROVIDER=auto`** (the default), the app tries Bedrock first and uses Gemini when Bedrock is not configured or returns credential/access errors. Set **`AI_PROVIDER=gemini`** to use only Gemini (e.g. local dev without AWS keys). Cheapest defaults are **`gemini-2.5-flash-lite`** for text and **`text-embedding-004`** for embeddings (override with `GEMINI_TEXT_MODEL` / `GEMINI_EMBEDDING_MODEL`). Transient **503 / rate limits** are retried with backoff (**`GEMINI_MAX_RETRIES`**, default 5). If Flash-Lite is often overloaded, try **`GEMINI_TEXT_MODEL=gemini-2.5-flash`** (slightly pricier, often more capacity).
+- **Google Gemini (fallback or standalone):** set `GEMINI_API_KEY`. With **`AI_PROVIDER=auto`** (the default), the app tries Bedrock first and uses Gemini when Bedrock is not configured or returns credential/access errors. Set **`AI_PROVIDER=gemini`** to use only Gemini (e.g. local dev without AWS keys). Cheapest defaults are **`gemini-2.5-flash-lite`** for text and **`gemini-embedding-001`** for embeddings (override with `GEMINI_TEXT_MODEL` / `GEMINI_EMBEDDING_MODEL`). Transient **503 / rate limits** are retried with backoff (**`GEMINI_MAX_RETRIES`**, default 5). If Flash-Lite is often overloaded, try **`GEMINI_TEXT_MODEL=gemini-2.5-flash`** (slightly pricier, often more capacity).
 
 ```env
 AWS_REGION=us-east-1
@@ -98,7 +98,7 @@ npm run generate:jds      # 1500 rows → scripts/seed/tcs-jds-1500.jsonl
 
 To **replace** everything in `cvs-*` and `job-descriptions/` with the TCS JSONL corpus **and** up to **1500** résumé PDFs from [curriculum_vitae_data](https://github.com/arefinnomi/curriculum_vitae_data) (with **LLM metadata per CV**, same as uploading each PDF by hand — Bedrock preferred, Gemini if Bedrock is unavailable):
 
-1. Run **`npm run seed:full`** from the project root (optional: **`npm run seed:full -- 50`** to import only 50 CVs), or open **`/cvs`** and use **Seed full dataset** (set the CV count, then type `DELETE` to confirm). The HTTP API expects **`POST /api/admin/seed`** with JSON **`{ "confirm": "DELETE", "maxCvFiles"?: number }`** (omit `maxCvFiles` for the default of 1500; max 5000).
+1. Run **`npm run seed:full`** from the project root (optional: **`npm run seed:full -- 50`** for 50 CVs and default 1500 JD lines; **`npm run seed:full -- 1500 50`** for 1500 CVs and 50 JD lines), or open **`/cvs`** and use **Seed full dataset** (set JD and CV counts, then type `DELETE` to confirm). The HTTP API expects **`POST /api/admin/seed`** with JSON **`{ "confirm": "DELETE", "maxCvFiles"?: number, "maxJdLines"?: number }`** (omit either field for its default of 1500; each max 5000).
 
 The HTTP route uses a long **`maxDuration`** (1 hour), but reverse proxies or serverless limits may still cut the connection off—**CLI is the most reliable** for the full 1500 CVs. **`evaluations/`** is not deleted by this flow; old runs may reference removed CVs until you delete those runs in the UI.
 

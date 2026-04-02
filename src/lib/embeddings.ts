@@ -19,9 +19,11 @@ import {
   getGeminiEmbeddingModelId,
   hasGeminiApiKey,
 } from "@/lib/gemini";
-import { embeddingsDir, jobEmbeddingIndexPath } from "@/lib/paths";
+import { cvEmbeddingIndexPath, embeddingsDir, jobEmbeddingIndexPath } from "@/lib/paths";
 import {
   getCvMeta,
+  getJobMeta,
+  listCvs,
   listJobDescriptions,
   readCvExtractedText,
   readJobExtractedText,
@@ -116,6 +118,18 @@ type JobIndexFile = {
   entries: Record<string, JobIndexEntry>;
 };
 
+type CvIndexEntry = {
+  fingerprint: string;
+  values: number[];
+};
+
+type CvIndexFile = {
+  model: string;
+  entries: Record<string, CvIndexEntry>;
+  /** ISO time when index was last fully written (best-effort). */
+  updatedAt?: string;
+};
+
 /** Concurrent embedding API calls per wave. */
 const EMBED_CONCURRENCY = 12;
 
@@ -172,7 +186,10 @@ async function invokeTitanEmbedding(inputText: string): Promise<number[]> {
   }
 }
 
-async function invokeEmbeddingVector(inputText: string): Promise<number[]> {
+async function invokeEmbeddingVector(
+  inputText: string,
+  geminiTaskType?: "RETRIEVAL_QUERY" | "RETRIEVAL_DOCUMENT",
+): Promise<number[]> {
   async function viaBedrock(): Promise<number[]> {
     const v = await invokeTitanEmbedding(inputText);
     lockedEmbedBackend = "bedrock";
@@ -180,7 +197,9 @@ async function invokeEmbeddingVector(inputText: string): Promise<number[]> {
   }
 
   async function viaGemini(): Promise<number[]> {
-    const v = await embedTextWithGemini(inputText);
+    const v = await embedTextWithGemini(inputText, {
+      taskType: geminiTaskType,
+    });
     lockedEmbedBackend = "gemini";
     return v;
   }
@@ -231,7 +250,7 @@ async function embedContentSingle(
     taskType === "RETRIEVAL_DOCUMENT"
       ? documentEmbeddingInput(text, title)
       : truncateForEmbedding(text);
-  return invokeEmbeddingVector(input);
+  return invokeEmbeddingVector(input, taskType);
 }
 
 async function batchEmbedContents(
@@ -344,6 +363,336 @@ export async function ensureJobEmbeddingIndex(): Promise<JobIndexFile> {
 
   await saveJobIndex(index);
   return index;
+}
+
+export async function readCvEmbeddingIndexSnapshot(): Promise<{
+  model: string;
+  updatedAt?: string;
+  entryCount: number;
+}> {
+  const idx = await loadCvIndex();
+  return {
+    model: idx.model,
+    updatedAt: idx.updatedAt,
+    entryCount: Object.keys(idx.entries).length,
+  };
+}
+
+async function loadCvIndex(): Promise<CvIndexFile> {
+  try {
+    const raw = await readFile(cvEmbeddingIndexPath(), "utf8");
+    const parsed = JSON.parse(raw) as CvIndexFile;
+    if (
+      typeof parsed.model === "string" &&
+      parsed.entries &&
+      typeof parsed.entries === "object"
+    ) {
+      return {
+        model: normalizeStoredIndexModel(parsed.model),
+        entries: parsed.entries,
+        updatedAt:
+          typeof parsed.updatedAt === "string" ? parsed.updatedAt : undefined,
+      };
+    }
+  } catch {
+    /* missing or invalid */
+  }
+  return { model: bedrockIndexKey(1024), entries: {} };
+}
+
+async function saveCvIndex(index: CvIndexFile): Promise<void> {
+  await mkdir(embeddingsDir(), { recursive: true });
+  const toSave: CvIndexFile = {
+    ...index,
+    updatedAt: new Date().toISOString(),
+  };
+  await writeFile(cvEmbeddingIndexPath(), JSON.stringify(toSave), "utf8");
+}
+
+/**
+ * Ensures on-disk document vectors exist for every CV with extractable text.
+ * Stays aligned with the job index embedding model when the job index is non-empty.
+ */
+export async function ensureCvEmbeddingIndex(): Promise<CvIndexFile> {
+  const jobIndex = await ensureJobEmbeddingIndex();
+  const cvs = await listCvs();
+  let index = await loadCvIndex();
+
+  if (
+    Object.keys(jobIndex.entries).length > 0 &&
+    index.model !== jobIndex.model
+  ) {
+    index = { model: jobIndex.model, entries: {} };
+  }
+
+  const toEmbed: Array<{
+    id: string;
+    text: string;
+    title: string;
+    fingerprint: string;
+  }> = [];
+
+  for (const cv of cvs) {
+    const text = (await readCvExtractedText(cv.id)) ?? "";
+    if (!text.trim()) continue;
+    const fp = fingerprintText(text);
+    const existing = index.entries[cv.id];
+    if (existing && existing.fingerprint === fp && existing.values.length > 0) {
+      continue;
+    }
+    const title =
+      cv.gemini?.title?.trim() ||
+      cv.originalName.replace(/\.[^.]+$/, "") ||
+      "CV";
+    toEmbed.push({ id: cv.id, text, title, fingerprint: fp });
+  }
+
+  const batchSize = 100;
+  for (let i = 0; i < toEmbed.length; i += batchSize) {
+    const chunk = toEmbed.slice(i, i + batchSize);
+    const vectors = await batchEmbedContents(
+      chunk.map((c) => ({
+        text: c.text,
+        taskType: "RETRIEVAL_DOCUMENT" as const,
+        title: c.title,
+      })),
+    );
+    const key = indexKeyForVector(vectors[0]!);
+    if (index.model !== key) {
+      lockedEmbedBackend = null;
+      index = { model: key, entries: {} };
+      await saveCvIndex(index);
+      return ensureCvEmbeddingIndex();
+    }
+    for (let j = 0; j < chunk.length; j++) {
+      const c = chunk[j]!;
+      index.entries[c.id] = {
+        fingerprint: c.fingerprint,
+        values: vectors[j]!,
+      };
+    }
+  }
+
+  const cvIds = new Set(cvs.map((c) => c.id));
+  for (const id of Object.keys(index.entries)) {
+    if (!cvIds.has(id)) delete index.entries[id];
+  }
+
+  await saveCvIndex(index);
+  return index;
+}
+
+export type CvMatchRow = {
+  cvId: string;
+  cvOriginalName: string;
+  scorePercent: number;
+  cosineSimilarity: number;
+  skipped?: boolean;
+  skipReason?: string;
+};
+
+/**
+ * Ranks all CVs against one job using cached document embeddings for CVs and the job.
+ * Uses the job text as RETRIEVAL_QUERY and CV vectors as documents (mirrors {@link rankCvAgainstJobs}).
+ */
+export async function rankCvsAgainstJob(
+  jobDescriptionId: string,
+): Promise<CvMatchRow[]> {
+  const jobFromMeta = await getJobMeta(jobDescriptionId);
+  if (!jobFromMeta) {
+    throw new Error("JOB_NOT_FOUND");
+  }
+
+  const jobText = await readJobExtractedText(jobDescriptionId);
+  if (!jobText?.trim()) {
+    throw new Error("JOB_TEXT_MISSING");
+  }
+
+  const cvIndex = await ensureCvEmbeddingIndex();
+  await ensureJobEmbeddingIndex();
+
+  const jobVec = await embedContentSingle(jobText, "RETRIEVAL_QUERY");
+
+  const cvs = await listCvs();
+  const rows: CvMatchRow[] = [];
+
+  for (const cv of cvs) {
+    const cvText = await readCvExtractedText(cv.id);
+    if (!cvText?.trim()) {
+      rows.push({
+        cvId: cv.id,
+        cvOriginalName: cv.originalName,
+        scorePercent: 0,
+        cosineSimilarity: 0,
+        skipped: true,
+        skipReason: "no_extracted_text",
+      });
+      continue;
+    }
+    const cvEntry = cvIndex.entries[cv.id];
+    if (!cvEntry?.values.length) {
+      rows.push({
+        cvId: cv.id,
+        cvOriginalName: cv.originalName,
+        scorePercent: 0,
+        cosineSimilarity: 0,
+        skipped: true,
+        skipReason: "embedding_missing",
+      });
+      continue;
+    }
+    if (cvEntry.values.length !== jobVec.length) {
+      rows.push({
+        cvId: cv.id,
+        cvOriginalName: cv.originalName,
+        scorePercent: 0,
+        cosineSimilarity: 0,
+        skipped: true,
+        skipReason: "embedding_dimension_mismatch",
+      });
+      continue;
+    }
+    const sim = cosineSimilarity(jobVec, cvEntry.values);
+    rows.push({
+      cvId: cv.id,
+      cvOriginalName: cv.originalName,
+      scorePercent: cosineToPercent(sim),
+      cosineSimilarity: sim,
+    });
+  }
+
+  rows.sort((a, b) => b.scorePercent - a.scorePercent);
+  return rows;
+}
+
+export type JobCvMatrixRow = {
+  jobDescriptionId: string;
+  jobTitle: string;
+  matches: CvMatchRow[];
+};
+
+/**
+ * Full job × CV embedding ranks in one pass (batched job query embeddings).
+ */
+export async function buildJobCvMatrix(): Promise<JobCvMatrixRow[]> {
+  const cvIndex = await ensureCvEmbeddingIndex();
+  await ensureJobEmbeddingIndex();
+  const jobs = await listJobDescriptions();
+  const cvs = await listCvs();
+
+  const withText: Array<{
+    job: (typeof jobs)[0];
+    text: string;
+  }> = [];
+  for (const job of jobs) {
+    const text = (await readJobExtractedText(job.id)) ?? "";
+    if (!text.trim()) continue;
+    withText.push({ job, text });
+  }
+
+  if (withText.length === 0) {
+    return [];
+  }
+
+  const queryVectors = await batchEmbedContents(
+    withText.map((w) => ({
+      text: w.text,
+      taskType: "RETRIEVAL_QUERY" as const,
+    })),
+  );
+
+  const cvList = await Promise.all(
+    cvs.map(async (cv) => ({
+      meta: cv,
+      text: (await readCvExtractedText(cv.id)) ?? "",
+    })),
+  );
+
+  const out: JobCvMatrixRow[] = [];
+
+  for (let i = 0; i < withText.length; i++) {
+    const { job } = withText[i]!;
+    const jobVec = queryVectors[i]!;
+    const title =
+      job.titleGuess?.trim() ||
+      job.originalName.replace(/\.[^.]+$/, "") ||
+      "Job";
+
+    const matches: CvMatchRow[] = [];
+    for (const { meta: cv, text: cvText } of cvList) {
+      if (!cvText.trim()) {
+        matches.push({
+          cvId: cv.id,
+          cvOriginalName: cv.originalName,
+          scorePercent: 0,
+          cosineSimilarity: 0,
+          skipped: true,
+          skipReason: "no_extracted_text",
+        });
+        continue;
+      }
+      const cvEntry = cvIndex.entries[cv.id];
+      if (!cvEntry?.values.length) {
+        matches.push({
+          cvId: cv.id,
+          cvOriginalName: cv.originalName,
+          scorePercent: 0,
+          cosineSimilarity: 0,
+          skipped: true,
+          skipReason: "embedding_missing",
+        });
+        continue;
+      }
+      if (cvEntry.values.length !== jobVec.length) {
+        matches.push({
+          cvId: cv.id,
+          cvOriginalName: cv.originalName,
+          scorePercent: 0,
+          cosineSimilarity: 0,
+          skipped: true,
+          skipReason: "embedding_dimension_mismatch",
+        });
+        continue;
+      }
+      const sim = cosineSimilarity(jobVec, cvEntry.values);
+      matches.push({
+        cvId: cv.id,
+        cvOriginalName: cv.originalName,
+        scorePercent: cosineToPercent(sim),
+        cosineSimilarity: sim,
+      });
+    }
+    matches.sort((a, b) => b.scorePercent - a.scorePercent);
+    out.push({
+      jobDescriptionId: job.id,
+      jobTitle: title,
+      matches,
+    });
+  }
+
+  const withTextIds = new Set(withText.map((w) => w.job.id));
+  for (const job of jobs) {
+    if (withTextIds.has(job.id)) continue;
+    const title =
+      job.titleGuess?.trim() ||
+      job.originalName.replace(/\.[^.]+$/, "") ||
+      "Job";
+    const matches: CvMatchRow[] = cvs.map((cv) => ({
+      cvId: cv.id,
+      cvOriginalName: cv.originalName,
+      scorePercent: 0,
+      cosineSimilarity: 0,
+      skipped: true,
+      skipReason: "job_no_extracted_text",
+    }));
+    out.push({
+      jobDescriptionId: job.id,
+      jobTitle: title,
+      matches,
+    });
+  }
+
+  return out;
 }
 
 export type JobMatchRow = {
