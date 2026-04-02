@@ -7,7 +7,7 @@ import type { ApiErrorBody, BulkEvaluateStreamEvent } from "@/components/ApiType
 import { PreviewModal } from "@/components/PreviewModal";
 
 /** Stable min width so table columns don’t jump between loading and loaded. */
-const JOBS_TABLE_MIN_WIDTH = "56rem";
+const JOBS_TABLE_MIN_WIDTH = "54rem";
 
 function BulkSpinner({ className = "size-4" }: { className?: string }) {
   return (
@@ -116,46 +116,61 @@ function StatCardSkeleton() {
 
 function JobsTableSkeleton() {
   return (
-    <div className="mt-3 overflow-x-auto rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-      <table
-        className="w-full table-fixed text-left text-sm"
-        style={{ minWidth: JOBS_TABLE_MIN_WIDTH }}
-      >
-        <thead className="border-b border-zinc-200 bg-zinc-50 text-xs font-semibold uppercase tracking-wide text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900/50 dark:text-zinc-400">
-          <tr>
-            <th className="w-[19%] px-3 py-2">Job</th>
-            <th className="w-[17%] px-3 py-2">Best match</th>
-            <th className="w-[6%] px-3 py-2">%</th>
-            <th className="w-[28%] px-3 py-2">Top 3</th>
-            <th className="w-[17%] px-3 py-2">LLM best</th>
-            <th className="w-[13%] px-3 py-2" />
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-          {Array.from({ length: 10 }, (_, i) => (
-            <tr key={i}>
-              <td className="px-3 py-3">
-                <div className="h-4 w-[85%] animate-pulse rounded bg-zinc-200 dark:bg-zinc-700" />
-              </td>
-              <td className="px-3 py-3">
-                <div className="h-4 w-[70%] animate-pulse rounded bg-zinc-200 dark:bg-zinc-700" />
-              </td>
-              <td className="px-3 py-3">
-                <div className="h-4 w-8 animate-pulse rounded bg-zinc-200 dark:bg-zinc-700" />
-              </td>
-              <td className="px-3 py-3">
-                <div className="h-4 w-[90%] animate-pulse rounded bg-zinc-200 dark:bg-zinc-700" />
-              </td>
-              <td className="px-3 py-3">
-                <div className="h-4 w-[65%] animate-pulse rounded bg-zinc-200 dark:bg-zinc-700" />
-              </td>
-              <td className="px-3 py-3">
-                <div className="ml-auto h-4 w-16 animate-pulse rounded bg-zinc-100 dark:bg-zinc-800" />
-              </td>
+    <div className="mt-3 overflow-hidden rounded-2xl border border-teal-200/85 bg-gradient-to-b from-teal-50/80 to-white shadow-sm dark:border-teal-900/45 dark:from-teal-950/35 dark:to-zinc-950/80">
+      <div className="flex animate-pulse flex-wrap items-center justify-between gap-2 border-b border-teal-200/70 px-4 py-3.5 dark:border-teal-900/40">
+        <div className="space-y-2">
+          <div className="h-5 w-52 rounded-md bg-zinc-200 dark:bg-zinc-700" />
+          <div className="h-3 w-full max-w-md rounded bg-zinc-100 dark:bg-zinc-800" />
+        </div>
+        <div className="flex gap-2">
+          <div className="h-7 w-16 rounded-full bg-zinc-200 dark:bg-zinc-700" />
+          <div className="h-7 w-20 rounded-lg bg-zinc-200 dark:bg-zinc-700" />
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table
+          className="w-full table-fixed text-left text-sm"
+          style={{ minWidth: JOBS_TABLE_MIN_WIDTH }}
+        >
+          <thead className="border-b border-teal-100/90 bg-teal-50/50 text-[11px] font-semibold uppercase tracking-wide text-teal-900/60 dark:border-teal-900/30 dark:bg-teal-950/20 dark:text-teal-400/70">
+            <tr>
+              <th className="w-[20%] px-4 py-2.5">Job</th>
+              <th className="w-[12%] px-4 py-2.5">Match</th>
+              <th className="w-[40%] px-4 py-2.5">Top 3</th>
+              <th className="w-[18%] px-4 py-2.5">LLM best</th>
+              <th className="w-[10%] px-4 py-2.5 text-right">Actions</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody className="divide-y divide-teal-100/50 dark:divide-teal-900/25">
+            {Array.from({ length: 10 }, (_, i) => (
+              <tr key={i}>
+                <td className="px-4 py-3">
+                  <div className="h-4 w-[85%] animate-pulse rounded bg-zinc-200 dark:bg-zinc-700" />
+                </td>
+                <td className="px-4 py-3">
+                  <div className="space-y-1.5">
+                    <div className="h-4 w-10 animate-pulse rounded bg-zinc-200 dark:bg-zinc-700" />
+                    <div className="h-1.5 w-16 animate-pulse rounded-full bg-zinc-200 dark:bg-zinc-700" />
+                  </div>
+                </td>
+                <td className="px-4 py-3">
+                  <div className="flex flex-wrap gap-1.5">
+                    <div className="h-7 w-24 animate-pulse rounded-lg bg-zinc-200 dark:bg-zinc-700" />
+                    <div className="h-7 w-28 animate-pulse rounded-lg bg-zinc-200 dark:bg-zinc-700" />
+                    <div className="h-7 w-20 animate-pulse rounded-lg bg-zinc-200 dark:bg-zinc-700" />
+                  </div>
+                </td>
+                <td className="px-4 py-3">
+                  <div className="h-4 w-[65%] animate-pulse rounded bg-zinc-200 dark:bg-zinc-700" />
+                </td>
+                <td className="px-4 py-3">
+                  <div className="ml-auto h-7 w-14 animate-pulse rounded-md bg-zinc-100 dark:bg-zinc-800" />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -741,7 +756,6 @@ export function AnalyticsClient() {
           </div>
           <div className="mt-2 h-4 w-full max-w-xl animate-pulse rounded bg-zinc-100 dark:bg-zinc-800" />
           <section className="mt-10">
-            <div className="h-6 w-72 animate-pulse rounded bg-zinc-200 dark:bg-zinc-700" />
             <JobsTableSkeleton />
           </section>
           <section className="mt-10">
@@ -852,128 +866,192 @@ export function AnalyticsClient() {
           ) : null}
 
           <section className="mt-10">
-            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
-              Jobs and best candidates (embedding)
-            </h2>
-            <div className="relative mt-3 overflow-x-auto rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+            <div className="relative overflow-hidden rounded-2xl border border-teal-200/85 bg-gradient-to-b from-teal-50/90 via-white to-white shadow-sm dark:border-teal-900/45 dark:from-teal-950/40 dark:via-zinc-950/90 dark:to-zinc-950/80">
               {refreshing ? (
                 <div
-                  className="pointer-events-none absolute inset-0 z-[1] bg-zinc-100/35 dark:bg-zinc-950/35"
+                  className="pointer-events-none absolute inset-0 z-[1] bg-teal-50/30 dark:bg-zinc-950/45"
                   aria-hidden
                 />
               ) : null}
-              <table
-                className="relative z-0 w-full table-fixed text-left text-sm"
-                style={{ minWidth: JOBS_TABLE_MIN_WIDTH }}
-              >
-                <thead className="border-b border-zinc-200 bg-zinc-50 text-xs font-semibold uppercase tracking-wide text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900/50 dark:text-zinc-400">
-                  <tr>
-                    <th className="w-[19%] px-3 py-2">Job</th>
-                    <th className="w-[17%] px-3 py-2">Best match</th>
-                    <th className="w-[6%] px-3 py-2">%</th>
-                    <th className="w-[28%] px-3 py-2">Top 3</th>
-                    <th className="w-[17%] px-3 py-2">LLM best</th>
-                    <th className="w-[13%] px-3 py-2" />
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                  {overview.jobRows.map((row) => (
-                    <tr
-                      key={row.jobDescriptionId}
-                      className="hover:bg-zinc-50/80 dark:hover:bg-zinc-900/40"
+              <div className="relative z-0 flex flex-wrap items-start justify-between gap-3 border-b border-teal-200/70 px-4 py-3.5 dark:border-teal-900/40">
+                <div className="min-w-0 flex-1">
+                  <h2 className="text-base font-semibold tracking-tight text-teal-950 dark:text-teal-100">
+                    Jobs and best candidates (embedding)
+                  </h2>
+                  <p className="mt-1 max-w-2xl text-xs leading-relaxed text-teal-900/80 dark:text-teal-200/70">
+                    Cosine similarity between each job vector and every résumé.
+                    Click a chip in Top 3 to preview the PDF. Rank 1 is the best
+                    match. “At bar” means that best score meets your embedding
+                    closable threshold (
+                    {overview.thresholds.embeddingPercent}%).
+                  </p>
+                </div>
+                <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                  <span className="rounded-full bg-teal-600/15 px-2.5 py-1 text-xs font-semibold tabular-nums text-teal-900 dark:bg-teal-400/15 dark:text-teal-100">
+                    {overview.jobRows.length} job
+                    {overview.jobRows.length === 1 ? "" : "s"}
+                  </span>
+                  {csvBlobUrl ? (
+                    <a
+                      href={csvBlobUrl}
+                      download={`analytics-jobs-${overview.generatedAt.slice(0, 10)}.csv`}
+                      className="rounded-lg border border-teal-300/80 bg-white/90 px-2.5 py-1.5 text-xs font-medium text-teal-900 shadow-sm hover:bg-teal-50 dark:border-teal-800 dark:bg-teal-950/50 dark:text-teal-100 dark:hover:bg-teal-900/40"
                     >
-                      <td className="px-3 py-2 font-medium text-zinc-900 dark:text-zinc-50">
-                        <span className="line-clamp-2 break-words">
-                          {row.jobTitle}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2 text-zinc-700 dark:text-zinc-300">
-                        {row.bestEmbedding ? (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              openCvPdf(
-                                row.bestEmbedding!.cvId,
-                                row.bestEmbedding!.cvName,
-                              )
-                            }
-                            className="max-w-full cursor-pointer truncate text-left font-medium text-zinc-900 underline decoration-zinc-400 underline-offset-2 hover:decoration-zinc-700 dark:text-zinc-100 dark:decoration-zinc-500 dark:hover:decoration-zinc-300"
-                            title="View PDF"
-                            aria-label={`View PDF for ${row.bestEmbedding.cvName}`}
+                      Export CSV
+                    </a>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="relative z-0 overflow-x-auto">
+                {overview.jobRows.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center border-t border-dashed border-teal-200/60 px-4 py-14 text-center dark:border-teal-900/40">
+                    <p className="text-sm font-medium text-teal-950 dark:text-teal-100">
+                      No job descriptions yet
+                    </p>
+                    <p className="mt-1 max-w-sm text-xs leading-relaxed text-teal-900/65 dark:text-teal-200/60">
+                      Add roles to see embedding-ranked résumés here.
+                    </p>
+                  </div>
+                ) : (
+                  <table
+                    className="w-full table-fixed text-left text-sm"
+                    style={{ minWidth: JOBS_TABLE_MIN_WIDTH }}
+                  >
+                    <thead className="border-b border-teal-100/90 bg-teal-50/50 text-[11px] font-semibold uppercase tracking-wide text-teal-900/70 dark:border-teal-900/30 dark:bg-teal-950/20 dark:text-teal-300/80">
+                      <tr>
+                        <th className="w-[20%] px-4 py-2.5">Job</th>
+                        <th className="w-[12%] px-4 py-2.5">Match</th>
+                        <th className="w-[40%] px-4 py-2.5">Top 3</th>
+                        <th className="w-[18%] px-4 py-2.5">LLM best</th>
+                        <th className="w-[10%] px-4 py-2.5 text-right">
+                          Actions
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-teal-100/60 dark:divide-teal-900/25">
+                      {overview.jobRows.map((row) => {
+                        const emb = row.bestEmbedding;
+                        const atBar =
+                          emb != null &&
+                          emb.scorePercent >=
+                            overview.thresholds.embeddingPercent;
+                        return (
+                          <tr
+                            key={row.jobDescriptionId}
+                            className="transition-colors hover:bg-teal-50/45 dark:hover:bg-teal-950/25"
                           >
-                            {row.bestEmbedding.cvName}
-                          </button>
-                        ) : (
-                          "—"
-                        )}
-                      </td>
-                      <td className="whitespace-nowrap px-3 py-2 tabular-nums">
-                        {row.bestEmbedding != null
-                          ? row.bestEmbedding.scorePercent
-                          : "—"}
-                      </td>
-                      <td className="px-3 py-2 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
-                        {row.top3Embedding.length ? (
-                          <span className="flex flex-wrap gap-x-1 gap-y-1">
-                            {row.top3Embedding.map((t, i) => (
-                              <span key={t.cvId} className="inline">
-                                {i > 0 ? (
-                                  <span className="text-zinc-400">, </span>
-                                ) : null}
-                                <button
-                                  type="button"
-                                  onClick={() => openCvPdf(t.cvId, t.cvName)}
-                                  className="cursor-pointer text-left font-medium text-zinc-800 underline decoration-zinc-400 underline-offset-2 hover:decoration-zinc-600 dark:text-zinc-200 dark:decoration-zinc-500 dark:hover:decoration-zinc-300"
-                                  title="View PDF"
-                                  aria-label={`View PDF for ${t.cvName}`}
-                                >
-                                  {t.cvName}{" "}
-                                  <span className="font-normal text-zinc-500 dark:text-zinc-500">
-                                    ({t.scorePercent})
-                                  </span>
-                                </button>
+                            <td className="px-4 py-3 align-top">
+                              <span className="line-clamp-2 text-sm font-semibold leading-snug text-zinc-900 dark:text-zinc-50">
+                                {row.jobTitle}
                               </span>
-                            ))}
-                          </span>
-                        ) : (
-                          "—"
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">
-                        {row.bestLlm ? (
-                          <span>
-                            {row.bestLlm.cvName}{" "}
-                            <span className="font-medium text-zinc-900 dark:text-zinc-100">
-                              ({row.bestLlm.overallScore})
-                            </span>
-                          </span>
-                        ) : (
-                          "—"
-                        )}
-                      </td>
-                      <td className="whitespace-nowrap px-3 py-2 text-right">
-                        <Link
-                          href={`/evaluate?jobDescriptionId=${row.jobDescriptionId}`}
-                          className="font-medium text-zinc-900 underline dark:text-zinc-100"
-                        >
-                          Evaluate
-                        </Link>
-                        {row.bestLlm ? (
-                          <>
-                            {" · "}
-                            <Link
-                              href={`/dashboard/compare/${row.bestLlm.runId}`}
-                              className="font-medium text-zinc-900 underline dark:text-zinc-100"
-                            >
-                              Compare
-                            </Link>
-                          </>
-                        ) : null}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                            </td>
+                            <td className="px-4 py-3 align-top">
+                              {emb != null ? (
+                                <div className="flex max-w-[6.5rem] flex-col gap-1.5">
+                                  <div className="flex flex-wrap items-center gap-1.5">
+                                    <span
+                                      className={`text-sm font-semibold tabular-nums ${atBar ? "text-emerald-700 dark:text-emerald-400" : "text-zinc-800 dark:text-zinc-200"}`}
+                                    >
+                                      {emb.scorePercent}%
+                                    </span>
+                                    {atBar ? (
+                                      <span className="rounded bg-emerald-600/15 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-emerald-800 dark:bg-emerald-400/15 dark:text-emerald-200">
+                                        At bar
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                  <div
+                                    className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-700"
+                                    title={`${emb.scorePercent}% similarity`}
+                                  >
+                                    <div
+                                      className="h-full rounded-full bg-gradient-to-r from-teal-500 to-emerald-500"
+                                      style={{
+                                        width: `${Math.min(100, emb.scorePercent)}%`,
+                                      }}
+                                    />
+                                  </div>
+                                </div>
+                              ) : (
+                                <span className="text-sm text-zinc-400 dark:text-zinc-500">
+                                  —
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-4 py-3 align-top">
+                              {row.top3Embedding.length ? (
+                                <div className="flex flex-wrap gap-1.5">
+                                  {row.top3Embedding.map((t, i) => (
+                                    <button
+                                      key={t.cvId}
+                                      type="button"
+                                      onClick={() =>
+                                        openCvPdf(t.cvId, t.cvName)
+                                      }
+                                      className="inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-lg border border-teal-200/75 bg-teal-50/90 px-2 py-1.5 text-left text-xs font-medium text-teal-950 transition-colors hover:border-teal-400 hover:bg-teal-100/90 dark:border-teal-800/55 dark:bg-teal-950/45 dark:text-teal-100 dark:hover:border-teal-600 dark:hover:bg-teal-900/50"
+                                      title="Open PDF preview"
+                                      aria-label={`Open PDF for ${t.cvName}, rank ${i + 1}`}
+                                    >
+                                      <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-teal-600/20 text-[10px] font-bold tabular-nums text-teal-900 dark:bg-teal-400/25 dark:text-teal-100">
+                                        {i + 1}
+                                      </span>
+                                      <span className="min-w-0 truncate">
+                                        {t.cvName}
+                                      </span>
+                                      <span className="shrink-0 tabular-nums text-teal-800/85 dark:text-teal-300/90">
+                                        {t.scorePercent}
+                                      </span>
+                                    </button>
+                                  ))}
+                                </div>
+                              ) : (
+                                <span className="text-sm text-zinc-400 dark:text-zinc-500">
+                                  —
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-4 py-3 align-top">
+                              {row.bestLlm ? (
+                                <div className="flex min-w-0 flex-col gap-1">
+                                  <span className="line-clamp-2 text-sm text-zinc-700 dark:text-zinc-300">
+                                    {row.bestLlm.cvName}
+                                  </span>
+                                  <span className="inline-flex w-fit items-center rounded-md bg-violet-100 px-1.5 py-0.5 text-xs font-semibold tabular-nums text-violet-900 dark:bg-violet-950/55 dark:text-violet-200">
+                                    {row.bestLlm.overallScore}
+                                  </span>
+                                </div>
+                              ) : (
+                                <span className="text-sm text-zinc-400 dark:text-zinc-500">
+                                  —
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-4 py-3 align-top text-right">
+                              <div className="flex flex-col items-end gap-1.5 sm:flex-row sm:flex-wrap sm:justify-end">
+                                <Link
+                                  href={`/evaluate?jobDescriptionId=${row.jobDescriptionId}`}
+                                  className="inline-flex items-center justify-center rounded-md bg-zinc-900 px-2.5 py-1 text-xs font-semibold text-white shadow-sm hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
+                                >
+                                  Evaluate
+                                </Link>
+                                {row.bestLlm ? (
+                                  <Link
+                                    href={`/dashboard/compare/${row.bestLlm.runId}`}
+                                    className="inline-flex items-center justify-center rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs font-semibold text-zinc-800 shadow-sm hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
+                                  >
+                                    Compare
+                                  </Link>
+                                ) : null}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
             </div>
           </section>
 
