@@ -5,9 +5,11 @@ import {
 import {
   compatibilityResultSchema,
   cvGeminiMetaSchema,
+  jobSkillsExtractionSchema,
   topMatchJustificationsResponseSchema,
   type CompatibilityResult,
   type CvGeminiMeta,
+  type JobSkillsExtraction,
 } from "@/lib/schemas";
 import {
   DEFAULT_BEDROCK_TEXT_MODEL,
@@ -191,6 +193,26 @@ ${truncateForPrompt(jobText, 24_000)}
   if (parsed.title === undefined || parsed.title === null) return null;
   const t = String(parsed.title).trim();
   return t.length ? t : null;
+}
+
+export async function extractJobSkillsWithBedrock(
+  jobText: string,
+): Promise<JobSkillsExtraction> {
+  const prompt = `From the job description, list technical and professional skills, tools, frameworks, and domains that are required or strongly preferred for the role.
+
+Return ONLY JSON: {"skills": string[]}
+- At most ~30 concise phrases (e.g. "Python", "AWS", "Agile", "Customer success")
+- Include soft skills only if explicitly emphasized as requirements
+
+Job description:
+---
+${truncateForPrompt(jobText, 24_000)}
+---
+`;
+
+  const text = await invokeClaudeJson(prompt);
+  const parsed = parseJsonObject<unknown>(text);
+  return jobSkillsExtractionSchema.parse(parsed);
 }
 
 export async function evaluateCompatibilityWithBedrock(

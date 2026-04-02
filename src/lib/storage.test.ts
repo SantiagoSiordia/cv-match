@@ -20,6 +20,9 @@ vi.mock("@/lib/aiProvider", () => ({
     experienceSummary: "Several years of testing.",
   })),
   guessJobTitleWithProvider: vi.fn(async () => "QA Engineer"),
+  extractJobSkillsWithProvider: vi.fn(async () => ({
+    skills: ["Jest", "TypeScript"],
+  })),
 }));
 
 describe("storage (isolated cwd)", () => {

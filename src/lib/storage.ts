@@ -13,6 +13,7 @@ import { extractTextFromPdf, extractTextFromPlainBuffer } from "@/lib/extractTex
 import {
   AiProviderConfigError,
   extractCvMetadataWithProvider,
+  extractJobSkillsWithProvider,
   GeminiConfigError,
   guessCvTitleWithProvider,
   guessJobTitleWithProvider,
@@ -332,6 +333,8 @@ export type PersistJobDescriptionOptions = {
   skipTitleInference?: boolean;
   /** Used when `skipTitleInference` is true (e.g. bulk seed title). */
   explicitTitleGuess?: string | null;
+  /** When true, skip JD skill extraction (saves API calls on bulk import). */
+  skipSkillExtraction?: boolean;
 };
 
 /**
@@ -369,8 +372,11 @@ export async function persistJobDescriptionFromBuffer(
     extracted.length > 0 && extracted.length < LOW_TEXT_THRESHOLD_CHARS;
 
   const skipTitle = options.skipTitleInference === true;
+  const skipSkillExtraction = options.skipSkillExtraction === true;
   let titleGuess: string | null | undefined;
   let geminiError: string | undefined;
+  let geminiSkills: string[] | undefined;
+  let geminiSkillsError: string | undefined;
 
   if (skipTitle) {
     const t = options.explicitTitleGuess?.trim();
@@ -394,6 +400,26 @@ export async function persistJobDescriptionFromBuffer(
     geminiError = extractError ?? "No text extracted";
   }
 
+  if (
+    !skipTitle &&
+    !skipSkillExtraction &&
+    extracted.length > 0 &&
+    !geminiError
+  ) {
+    try {
+      const out = await extractJobSkillsWithProvider(extracted);
+      geminiSkills = out.skills;
+    } catch (e) {
+      if (e instanceof AiProviderConfigError || e instanceof GeminiConfigError) {
+        geminiSkillsError = e.message;
+      } else if (e instanceof Error) {
+        geminiSkillsError = e.message;
+      } else {
+        geminiSkillsError = "Skill extraction failed";
+      }
+    }
+  }
+
   const uploadedAt = new Date().toISOString();
   const meta: JobStoredMeta = {
     id,
@@ -405,6 +431,8 @@ export async function persistJobDescriptionFromBuffer(
     extractedCharCount: extracted.length,
     ...(lowTextWarning ? { lowTextWarning: true } : {}),
     titleGuess: titleGuess ?? null,
+    ...(geminiSkills?.length ? { geminiSkills } : {}),
+    ...(geminiSkillsError ? { geminiSkillsError } : {}),
     ...(geminiError ? { geminiError } : {}),
     searchIndex: buildJobSearchIndex(
       originalName || "job-description",
@@ -413,6 +441,7 @@ export async function persistJobDescriptionFromBuffer(
       effectiveMime,
       extracted,
       geminiError,
+      geminiSkills,
     ),
   };
 
@@ -477,6 +506,57 @@ export async function getJobMeta(id: string): Promise<JobStoredMeta | null> {
     return parsed.type === "job_description" ? parsed : null;
   } catch {
     return null;
+  }
+}
+
+export async function saveJobMeta(meta: JobStoredMeta): Promise<void> {
+  await initStorageDirs();
+  const extracted = (await readJobExtractedText(meta.id)) ?? "";
+  const full: JobStoredMeta = {
+    ...meta,
+    searchIndex: buildJobSearchIndex(
+      meta.originalName,
+      meta.uploadedAt,
+      meta.titleGuess ?? null,
+      meta.mimeType,
+      extracted,
+      meta.geminiError,
+      meta.geminiSkills,
+    ),
+  };
+  await writeFile(jdMetaPath(meta.id), JSON.stringify(full, null, 2), "utf8");
+}
+
+/**
+ * Runs LLM skill extraction for one job and persists `geminiSkills` / `geminiSkillsError`.
+ */
+export async function backfillJobSkillsForJob(jobId: string): Promise<
+  | { ok: true; skills: string[] }
+  | { ok: false; error: string }
+> {
+  const meta = await getJobMeta(jobId);
+  if (!meta) return { ok: false, error: "NOT_FOUND" };
+  const text = await readJobExtractedText(jobId);
+  if (!text?.trim()) return { ok: false, error: "NO_TEXT" };
+  try {
+    const { skills } = await extractJobSkillsWithProvider(text);
+    const next: JobStoredMeta = { ...meta, geminiSkills: skills };
+    delete next.geminiSkillsError;
+    await saveJobMeta(next);
+    return { ok: true, skills };
+  } catch (e) {
+    const msg =
+      e instanceof AiProviderConfigError || e instanceof GeminiConfigError
+        ? e.message
+        : e instanceof Error
+          ? e.message
+          : "Skill extraction failed";
+    const next: JobStoredMeta = {
+      ...meta,
+      geminiSkillsError: msg,
+    };
+    await saveJobMeta(next);
+    return { ok: false, error: msg };
   }
 }
 

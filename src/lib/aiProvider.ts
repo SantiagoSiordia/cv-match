@@ -3,6 +3,7 @@ import {
   BedrockResponseError,
   evaluateCompatibilityWithBedrock,
   extractCvMetadataWithBedrock,
+  extractJobSkillsWithBedrock,
   generateTopMatchJustifications,
   guessCvTitleWithBedrock,
   guessJobTitleWithBedrock,
@@ -10,13 +11,18 @@ import {
 import {
   evaluateCompatibilityWithGemini,
   extractCvMetadataWithGemini,
+  extractJobSkillsWithGemini,
   GeminiConfigError,
   generateTopMatchJustificationsWithGemini,
   guessCvTitleWithGemini,
   guessJobTitleWithGemini,
   hasGeminiApiKey,
 } from "@/lib/gemini";
-import type { CompatibilityResult, CvGeminiMeta } from "@/lib/schemas";
+import type {
+  CompatibilityResult,
+  CvGeminiMeta,
+  JobSkillsExtraction,
+} from "@/lib/schemas";
 import type { TopMatchJustificationInput } from "@/lib/bedrock";
 
 export { GeminiConfigError };
@@ -115,6 +121,15 @@ export async function guessJobTitleWithProvider(
   return withBedrockPreferred(
     () => guessJobTitleWithBedrock(jobText),
     () => guessJobTitleWithGemini(jobText),
+  );
+}
+
+export async function extractJobSkillsWithProvider(
+  jobText: string,
+): Promise<JobSkillsExtraction> {
+  return withBedrockPreferred(
+    () => extractJobSkillsWithBedrock(jobText),
+    () => extractJobSkillsWithGemini(jobText),
   );
 }
 

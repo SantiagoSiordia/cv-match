@@ -20,6 +20,7 @@ export function buildJobSearchIndex(
   mimeType: string,
   extractedText: string,
   geminiError?: string,
+  geminiSkills?: string[],
 ): string {
   const base = (originalName || "").replace(/\.(pdf|txt)$/i, "").trim();
   const parts = [
@@ -30,6 +31,7 @@ export function buildJobSearchIndex(
     titleGuess ?? "",
     mimeType,
     geminiError ?? "",
+    (geminiSkills ?? []).join(" "),
     extractedText.slice(0, MAX_EXTRACT_CHARS),
   ];
   return parts

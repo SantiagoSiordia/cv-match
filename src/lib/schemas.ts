@@ -62,12 +62,22 @@ export const jobStoredMetaSchema = z.object({
   extractedCharCount: z.number(),
   lowTextWarning: z.boolean().optional(),
   titleGuess: z.string().nullable().optional(),
+  /** Required/preferred skills inferred once from the JD (LLM). */
+  geminiSkills: z.array(z.string()).optional(),
+  geminiSkillsError: z.string().optional(),
   geminiError: z.string().optional(),
   /** Normalized concat for client search (file, title, body prefix, etc.). */
   searchIndex: z.string().optional(),
 });
 
 export type JobStoredMeta = z.infer<typeof jobStoredMetaSchema>;
+
+/** LLM output shape for job skill extraction. */
+export const jobSkillsExtractionSchema = z.object({
+  skills: z.array(z.string()),
+});
+
+export type JobSkillsExtraction = z.infer<typeof jobSkillsExtractionSchema>;
 
 export const evaluationRunSchema = z.object({
   id: z.string().uuid(),
