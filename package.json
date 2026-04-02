@@ -16,12 +16,7 @@
     "local:docker:down": "docker compose down",
     "ingest:cvs": "tsx scripts/ingest-pdfs-from-directory.ts",
     "ingest:cv-dataset": "tsx scripts/ingest-github-cv-dataset.ts",
-    "migrate:cvs-layout": "tsx scripts/migrate-cvs-to-split-layout.ts",
-    "generate:jds": "tsx scripts/generate-tcs-job-descriptions.ts scripts/seed/tcs-jds-1500.jsonl",
-    "generate:jds:50": "tsx scripts/generate-tcs-job-descriptions.ts scripts/seed/tcs-jds-50.jsonl 50",
-    "seed:jds": "tsx scripts/ingest-job-descriptions-bulk.ts scripts/seed/tcs-jds-1500.jsonl",
-    "seed:jds:50": "tsx scripts/ingest-job-descriptions-bulk.ts scripts/seed/tcs-jds-50.jsonl",
-    "seed:full": "tsx scripts/seed-full.ts"
+    "migrate:cvs-layout": "tsx scripts/migrate-cvs-to-split-layout.ts"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.1019.0",

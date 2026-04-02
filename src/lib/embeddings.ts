@@ -492,6 +492,22 @@ export type CvMatchRow = {
 };
 
 /**
+ * Sort key for per-job CV ranking. When {@link cosineToPercent} ties (e.g. all 50%
+ * for cosine 0), stable sort would keep `listCvs()` order — newest first — so the
+ * latest upload incorrectly appeared as #1 for every opening.
+ */
+export function compareCvMatchRowsForRanking(a: CvMatchRow, b: CvMatchRow): number {
+  if (a.skipped !== b.skipped) {
+    return (a.skipped ? 1 : 0) - (b.skipped ? 1 : 0);
+  }
+  const dp = b.scorePercent - a.scorePercent;
+  if (dp !== 0) return dp;
+  const ds = b.cosineSimilarity - a.cosineSimilarity;
+  if (ds !== 0) return ds;
+  return a.cvId.localeCompare(b.cvId);
+}
+
+/**
  * Ranks all CVs against one job using cached document embeddings for CVs and the job.
  * Uses the job text as RETRIEVAL_QUERY and CV vectors as documents (mirrors {@link rankCvAgainstJobs}).
  */
@@ -561,7 +577,7 @@ export async function rankCvsAgainstJob(
     });
   }
 
-  rows.sort((a, b) => b.scorePercent - a.scorePercent);
+  rows.sort(compareCvMatchRowsForRanking);
   return rows;
 }
 
@@ -662,7 +678,7 @@ export async function buildJobCvMatrix(): Promise<JobCvMatrixRow[]> {
         cosineSimilarity: sim,
       });
     }
-    matches.sort((a, b) => b.scorePercent - a.scorePercent);
+    matches.sort(compareCvMatchRowsForRanking);
     out.push({
       jobDescriptionId: job.id,
       jobTitle: title,
@@ -705,6 +721,20 @@ export type JobMatchRow = {
   /** Short LLM explanation of the score; only set for the top non-skipped matches. */
   justification?: string;
 };
+
+export function compareJobMatchRowsForRanking(
+  a: JobMatchRow,
+  b: JobMatchRow,
+): number {
+  if (a.skipped !== b.skipped) {
+    return (a.skipped ? 1 : 0) - (b.skipped ? 1 : 0);
+  }
+  const dp = b.scorePercent - a.scorePercent;
+  if (dp !== 0) return dp;
+  const ds = b.cosineSimilarity - a.cosineSimilarity;
+  if (ds !== 0) return ds;
+  return a.jobDescriptionId.localeCompare(b.jobDescriptionId);
+}
 
 export async function rankCvAgainstJobs(cvId: string): Promise<JobMatchRow[]> {
   const cvMeta = await getCvMeta(cvId);
@@ -771,7 +801,7 @@ export async function rankCvAgainstJobs(cvId: string): Promise<JobMatchRow[]> {
     });
   }
 
-  rows.sort((a, b) => b.scorePercent - a.scorePercent);
+  rows.sort(compareJobMatchRowsForRanking);
   return rows;
 }
 

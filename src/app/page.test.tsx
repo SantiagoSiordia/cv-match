@@ -8,8 +8,8 @@ import { redirect } from "next/navigation";
 import Home from "./page";
 
 describe("Home page", () => {
-  it("redirects to /evaluate", () => {
+  it("redirects to /cvs", () => {
     Home();
-    expect(redirect).toHaveBeenCalledWith("/evaluate");
+    expect(redirect).toHaveBeenCalledWith("/cvs");
   });
 });

@@ -331,7 +331,7 @@ function isTextMime(mime: string, name: string) {
 export type PersistJobDescriptionOptions = {
   /** When true, do not call the LLM for title; use `explicitTitleGuess` or null. */
   skipTitleInference?: boolean;
-  /** Used when `skipTitleInference` is true (e.g. bulk seed title). */
+  /** Used when `skipTitleInference` is true (e.g. bulk import with known title). */
   explicitTitleGuess?: string | null;
   /** When true, skip JD skill extraction (saves API calls on bulk import). */
   skipSkillExtraction?: boolean;

@@ -71,38 +71,7 @@ By default the app writes under the project root (or under `CV_MATCH_DATA_ROOT` 
 
 These directories are **gitignored** in this repo (only `.gitkeep` files are committed). They are created automatically when you use the app.
 
-### TCS-style job corpus (optional)
-
-Job descriptions are stored under `job-descriptions/` after you run a seed script (no per-row LLM calls). **Résumés are uploaded separately** as PDFs on the `/cvs` page; those files go to `cvs-pdf/`.
-
-**50 roles** (smaller set):
-
-```bash
-npm run seed:jds:50
-```
-
-**~1500 roles** (full corpus):
-
-```bash
-npm run seed:jds
-```
-
-Regenerate JSONL after editing templates in `scripts/generate-tcs-job-descriptions.ts`:
-
-```bash
-npm run generate:jds:50   # 50 rows → scripts/seed/tcs-jds-50.jsonl
-npm run generate:jds      # 1500 rows → scripts/seed/tcs-jds-1500.jsonl
-```
-
-### Full seed (CVs + JDs, destructive)
-
-To **replace** everything in `cvs-*` and `job-descriptions/` with the TCS JSONL corpus **and** up to **1500** résumé PDFs from [curriculum_vitae_data](https://github.com/arefinnomi/curriculum_vitae_data) (with **LLM metadata per CV**, same as uploading each PDF by hand — Bedrock preferred, Gemini if Bedrock is unavailable):
-
-1. Run **`npm run seed:full`** from the project root (optional: **`npm run seed:full -- 50`** for 50 CVs and default 1500 JD lines; **`npm run seed:full -- 1500 50`** for 1500 CVs and 50 JD lines), or open **`/cvs`** and use **Seed full dataset** (set JD and CV counts, then type `DELETE` to confirm). The HTTP API expects **`POST /api/admin/seed`** with JSON **`{ "confirm": "DELETE", "maxCvFiles"?: number, "maxJdLines"?: number }`** (omit either field for its default of 1500; each max 5000).
-
-The HTTP route uses a long **`maxDuration`** (1 hour), but reverse proxies or serverless limits may still cut the connection off—**CLI is the most reliable** for the full 1500 CVs. **`evaluations/`** is not deleted by this flow; old runs may reference removed CVs until you delete those runs in the UI.
-
-There is **no separate admin secret**: confirmation is only the `DELETE` keyword in the UI or JSON body. Restrict network access (VPN, firewall, auth proxy) if the app is exposed beyond trusted users.
+Add job descriptions in the app under **Jobs** (`/job-descriptions`); upload CVs under **CVs** (`/cvs`). Optional CLI helpers for bulk PDFs live under `scripts/` (see `ingest:cvs` and `ingest:cv-dataset` in `package.json`).
 
 ---
 

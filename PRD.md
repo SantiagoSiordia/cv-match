@@ -86,7 +86,7 @@ cv-match/
 
 - End-user authentication and multi-tenancy
 - Database-backed storage (app uses JSON on disk)
-- In-app bulk processing UX (developer **CLI ingest scripts** may exist for seeding data; not part of core recruiter UI)
+- In-app bulk processing UX (developer **CLI ingest scripts** for PDFs/datasets; not part of core recruiter UI)
 - Email notifications
 
 ## Open Questions

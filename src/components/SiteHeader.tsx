@@ -3,7 +3,6 @@ import Link from "next/link";
 const links = [
   { href: "/cvs", label: "CVs" },
   { href: "/job-descriptions", label: "Jobs" },
-  { href: "/evaluate", label: "Evaluate" },
   { href: "/analytics", label: "Analytics" },
   { href: "/dashboard", label: "Results" },
 ] as const;
@@ -13,7 +12,7 @@ export function SiteHeader() {
     <header className="border-b border-zinc-200 bg-white/80 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/80">
       <div className="mx-auto flex max-w-7xl flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
         <Link
-          href="/evaluate"
+          href="/cvs"
           className="text-lg font-semibold tracking-tight text-zinc-900 dark:text-zinc-50"
         >
           CV Match
