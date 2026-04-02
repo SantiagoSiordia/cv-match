@@ -2,8 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import type { CvStoredMeta, JobStoredMeta } from "@/lib/schemas";
-import type { ApiCvList, ApiErrorBody, ApiJobList } from "@/components/ApiTypes";
+import type {
+  ApiCvList,
+  ApiErrorBody,
+  ApiJobList,
+  EvaluateStreamEvent,
+} from "@/components/ApiTypes";
 import type { EvaluationRun } from "@/lib/schemas";
 import {
   CV_SEARCH_FIELD_LABEL,
@@ -82,6 +88,25 @@ function SearchIcon({ className }: { className?: string }) {
   );
 }
 
+function CheckIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M20 6 9 17l-5-5" />
+    </svg>
+  );
+}
+
 function Spinner({ className = "h-4 w-4" }: { className?: string }) {
   return (
     <svg
@@ -109,6 +134,7 @@ function Spinner({ className = "h-4 w-4" }: { className?: string }) {
 }
 
 export function EvaluateClient() {
+  const searchParams = useSearchParams();
   const [cvs, setCvs] = useState<CvStoredMeta[]>([]);
   const [jobs, setJobs] = useState<JobStoredMeta[]>([]);
   const [loading, setLoading] = useState(true);
@@ -117,6 +143,16 @@ export function EvaluateClient() {
   const [selectedCv, setSelectedCv] = useState<Record<string, boolean>>({});
   const [running, setRunning] = useState(false);
   const [lastRun, setLastRun] = useState<EvaluationRun | null>(null);
+  type ProgressRow = {
+    cvId: string;
+    displayName: string;
+    state: "pending" | "running" | "done" | "error";
+    score?: number;
+    error?: string;
+  };
+  const [evaluateProgress, setEvaluateProgress] = useState<{
+    items: ProgressRow[];
+  } | null>(null);
   const [cvSearchQuery, setCvSearchQuery] = useState("");
 
   const load = useCallback(async () => {
@@ -154,6 +190,15 @@ export function EvaluateClient() {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    const q =
+      searchParams.get("jobDescriptionId")?.trim() ||
+      searchParams.get("job")?.trim();
+    if (!q || jobs.length === 0) return;
+    if (!jobs.some((j) => j.id === q)) return;
+    setJobId(q);
+  }, [searchParams, jobs]);
+
   const selectedIds = useMemo(
     () => Object.keys(selectedCv).filter((k) => selectedCv[k]),
     [selectedCv],
@@ -163,6 +208,17 @@ export function EvaluateClient() {
     () => cvs.filter((cv) => cvMatchesSearchQuery(cv, cvSearchQuery)),
     [cvs, cvSearchQuery],
   );
+
+  const evaluateProgressStats = useMemo(() => {
+    if (!evaluateProgress) return null;
+    const { items } = evaluateProgress;
+    const total = items.length;
+    const finished = items.filter(
+      (i) => i.state === "done" || i.state === "error",
+    ).length;
+    const pct = total ? Math.round((finished / total) * 100) : 0;
+    return { total, finished, pct };
+  }, [evaluateProgress]);
 
   const resumeListSummary = useMemo(() => {
     if (cvs.length === 0) return null;
@@ -186,24 +242,120 @@ export function EvaluateClient() {
       setError("Select at least one CV");
       return;
     }
+    const progressItems: ProgressRow[] = selectedIds.map((id) => {
+      const c = cvs.find((x) => x.id === id);
+      const displayName = (c?.gemini?.name ?? c?.originalName ?? id).trim();
+      return { cvId: id, displayName: displayName || id, state: "pending" };
+    });
+    setEvaluateProgress({ items: progressItems });
     setRunning(true);
     setLastRun(null);
     try {
-      const res = await fetch("/api/evaluate", {
+      const res = await fetch("/api/evaluate/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ jobDescriptionId: jobId, cvIds: selectedIds }),
       });
-      const json = (await res.json()) as
-        | { ok: true; data: { run: EvaluationRun } }
-        | ApiErrorBody;
-      if (!json.ok) {
-        setError(json.error.message);
+
+      if (!res.ok) {
+        let message = `Request failed (${res.status})`;
+        try {
+          const json = (await res.json()) as ApiErrorBody;
+          if (json.ok === false) message = json.error.message;
+        } catch {
+          /* use default */
+        }
+        setEvaluateProgress(null);
+        setError(message);
         return;
       }
-      setLastRun(json.data.run);
+
+      const reader = res.body?.getReader();
+      if (!reader) {
+        setEvaluateProgress(null);
+        setError("No response body");
+        return;
+      }
+
+      const dec = new TextDecoder();
+      let buf = "";
+      const applyEvent = (msg: EvaluateStreamEvent) => {
+        if (msg.type === "cv_start") {
+          setEvaluateProgress((prev) => {
+            if (!prev) return prev;
+            return {
+              items: prev.items.map((row) =>
+                row.cvId === msg.cvId ? { ...row, state: "running" } : row,
+              ),
+            };
+          });
+        } else if (msg.type === "cv_done") {
+          setEvaluateProgress((prev) => {
+            if (!prev) return prev;
+            return {
+              items: prev.items.map((row) =>
+                row.cvId === msg.cvId
+                  ? {
+                      ...row,
+                      state:
+                        msg.error !== undefined
+                          ? ("error" as const)
+                          : ("done" as const),
+                      score: msg.overallScore,
+                      error: msg.error,
+                    }
+                  : row,
+              ),
+            };
+          });
+        } else if (msg.type === "complete") {
+          setLastRun(msg.run);
+          setEvaluateProgress(null);
+        } else if (msg.type === "fatal") {
+          setError(msg.message);
+          setEvaluateProgress((prev) => {
+            if (!prev) return prev;
+            return {
+              items: prev.items.map((row) =>
+                row.state === "running"
+                  ? { ...row, state: "error", error: msg.message }
+                  : row,
+              ),
+            };
+          });
+        }
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        buf += dec.decode(value ?? new Uint8Array(), { stream: !done });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
+          const t = line.trim();
+          if (!t) continue;
+          try {
+            applyEvent(JSON.parse(t) as EvaluateStreamEvent);
+          } catch {
+            setError("Invalid progress data from server");
+            setEvaluateProgress(null);
+            return;
+          }
+        }
+        if (done) break;
+      }
+      const tail = buf.trim();
+      if (tail) {
+        try {
+          applyEvent(JSON.parse(tail) as EvaluateStreamEvent);
+        } catch {
+          setError("Invalid progress data from server");
+          setEvaluateProgress(null);
+        }
+      }
     } catch {
       setError("Evaluation request failed");
+      setEvaluateProgress(null);
     } finally {
       setRunning(false);
     }
@@ -442,6 +594,78 @@ export function EvaluateClient() {
             </p>
           ) : null}
         </div>
+
+        {evaluateProgress && evaluateProgressStats ? (
+          <div
+            className="mt-6 w-full rounded-2xl border border-zinc-200/90 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950/80"
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={evaluateProgressStats.pct}
+            aria-label="Evaluation progress"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+                Progress
+              </p>
+              <p className="text-xs font-medium tabular-nums text-zinc-500 dark:text-zinc-400">
+                {evaluateProgressStats.finished} / {evaluateProgressStats.total}{" "}
+                résumés
+              </p>
+            </div>
+            <div className="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
+              <div
+                className="h-full rounded-full bg-zinc-900 transition-[width] duration-300 ease-out motion-reduce:transition-none dark:bg-zinc-100"
+                style={{
+                  width: `${evaluateProgressStats.pct}%`,
+                }}
+              />
+            </div>
+            <ul className="mt-4 max-h-60 space-y-2 overflow-y-auto overscroll-contain pr-1 text-sm">
+              {evaluateProgress.items.map((row) => (
+                <li
+                  key={row.cvId}
+                  className="flex items-start gap-2.5 rounded-lg py-1"
+                >
+                  <span className="mt-0.5 shrink-0 text-zinc-500 dark:text-zinc-400">
+                    {row.state === "pending" ? (
+                      <span
+                        className="block size-4 rounded-full border-2 border-zinc-300 dark:border-zinc-600"
+                        aria-hidden
+                      />
+                    ) : row.state === "running" ? (
+                      <Spinner className="size-4 text-zinc-700 dark:text-zinc-200" />
+                    ) : row.state === "done" ? (
+                      <CheckIcon className="size-4 text-emerald-600 dark:text-emerald-400" />
+                    ) : (
+                      <span
+                        className="flex size-4 items-center justify-center text-base font-bold leading-none text-red-600 dark:text-red-400"
+                        aria-hidden
+                      >
+                        ×
+                      </span>
+                    )}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <span className="block truncate font-medium text-zinc-900 dark:text-zinc-100">
+                      {row.displayName}
+                    </span>
+                    {row.state === "done" && row.score !== undefined ? (
+                      <span className="text-xs tabular-nums text-zinc-500 dark:text-zinc-400">
+                        Score {row.score}
+                      </span>
+                    ) : null}
+                    {row.state === "error" && row.error ? (
+                      <span className="block text-xs text-red-700 dark:text-red-300">
+                        {row.error}
+                      </span>
+                    ) : null}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
 
         {error ? (
           <p
