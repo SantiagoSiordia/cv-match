@@ -1,6 +1,7 @@
 import {
   BedrockConfigError,
   BedrockResponseError,
+  evaluateCompatibilityBatchWithBedrock,
   evaluateCompatibilityWithBedrock,
   extractCvMetadataWithBedrock,
   extractJobSkillsWithBedrock,
@@ -9,6 +10,7 @@ import {
   guessJobTitleWithBedrock,
 } from "@/lib/bedrock";
 import {
+  evaluateCompatibilityBatchWithGemini,
   evaluateCompatibilityWithGemini,
   extractCvMetadataWithGemini,
   extractJobSkillsWithGemini,
@@ -140,6 +142,16 @@ export async function evaluateCompatibilityWithProvider(
   return withBedrockPreferred(
     () => evaluateCompatibilityWithBedrock(jobDescriptionText, cvText),
     () => evaluateCompatibilityWithGemini(jobDescriptionText, cvText),
+  );
+}
+
+export async function evaluateCompatibilityBatchWithProvider(
+  jobDescriptionText: string,
+  cvs: Array<{ cvId: string; cvText: string }>,
+): Promise<Map<string, CompatibilityResult>> {
+  return withBedrockPreferred(
+    () => evaluateCompatibilityBatchWithBedrock(jobDescriptionText, cvs),
+    () => evaluateCompatibilityBatchWithGemini(jobDescriptionText, cvs),
   );
 }
 

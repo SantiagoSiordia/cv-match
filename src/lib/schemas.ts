@@ -49,6 +49,17 @@ export const compatibilityResultSchema = z.object({
 
 export type CompatibilityResult = z.infer<typeof compatibilityResultSchema>;
 
+/** One row in a batched job-vs-multiple-CVs compatibility response. */
+export const compatibilityBatchRowSchema = compatibilityResultSchema.extend({
+  cvId: z.string().uuid(),
+});
+
+export const compatibilityBatchResponseSchema = z.object({
+  evaluations: z.array(compatibilityBatchRowSchema),
+});
+
+export type CompatibilityBatchRow = z.infer<typeof compatibilityBatchRowSchema>;
+
 /** Response shape for embedding match explanation (top roles only). */
 export const topMatchJustificationsResponseSchema = z.object({
   items: z.array(

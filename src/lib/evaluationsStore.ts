@@ -5,6 +5,22 @@ import { evaluationsDir } from "@/lib/paths";
 import { initStorageDirs } from "@/lib/storage";
 import { evaluationRunSchema, type EvaluationRun } from "@/lib/schemas";
 
+/** CV ids in the order stored on the run (evaluation order). */
+export function runCvIdsInOrder(run: EvaluationRun): string[] {
+  return run.results.map((r) => r.cvId);
+}
+
+/** True if the saved run used exactly this ordered cv id list. */
+export function runMatchesOrderedCvIds(
+  run: EvaluationRun | undefined,
+  cvIds: string[],
+): boolean {
+  if (!run) return false;
+  const a = runCvIdsInOrder(run);
+  if (a.length !== cvIds.length) return false;
+  return a.every((id, i) => id === cvIds[i]);
+}
+
 export async function saveEvaluationRun(
   run: Omit<EvaluationRun, "id" | "createdAt"> & {
     id?: string;

@@ -1,5 +1,6 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import {
+  compatibilityBatchResponseSchema,
   compatibilityResultSchema,
   cvGeminiMetaSchema,
   jobSkillsExtractionSchema,
@@ -320,6 +321,69 @@ ${truncateForPrompt(cvText, 24_000)}
   const text = await generateJsonText(prompt);
   const parsed = parseGeminiJsonText<unknown>(text);
   return compatibilityResultSchema.parse(parsed);
+}
+
+const BATCH_CV_TRUNCATE_GEMINI = 10_000;
+
+export async function evaluateCompatibilityBatchWithGemini(
+  jobDescriptionText: string,
+  cvs: Array<{ cvId: string; cvText: string }>,
+): Promise<Map<string, CompatibilityResult>> {
+  if (cvs.length === 0) return new Map();
+
+  const jobSlice = truncateForPrompt(jobDescriptionText, 24_000);
+  const blocks = cvs.map((c, i) => {
+    const body = truncateForPrompt(c.cvText, BATCH_CV_TRUNCATE_GEMINI);
+    return [
+      `### Candidate ${i + 1}`,
+      `cvId: ${c.cvId}`,
+      "Résumé text:",
+      "---",
+      body,
+      "---",
+    ].join("\n");
+  });
+
+  const prompt = `You are an experienced hiring manager. For EACH candidate block below, score how well they fit the SAME job.
+
+Return ONLY JSON with this exact shape:
+{"evaluations":[{"cvId":"<uuid from the block>","overallScore":0-100,"skillsMatch":0-100,"experienceRelevance":0-100,"educationFit":0-100,"strengths":["..."],"gaps":["..."],"summary":"..."}]}
+
+Rules:
+- evaluations must have exactly ${cvs.length} entries, one per block below, in the same order.
+- Each cvId must match the cvId given in that block exactly.
+- Scoring: skillsMatch = overlap with job; experienceRelevance = level/domain vs duties; educationFit = credentials vs requirements; overallScore = holistic (not a strict average).
+- strengths and gaps: short bullet strings; summary: 2-5 sentences.
+
+Job description:
+---
+${jobSlice}
+---
+
+${blocks.join("\n\n")}
+`;
+
+  const text = await generateJsonText(prompt);
+  const parsed = parseGeminiJsonText<unknown>(text);
+  const validated = compatibilityBatchResponseSchema.parse(parsed);
+  const out = new Map<string, CompatibilityResult>();
+  for (const row of validated.evaluations) {
+    const { cvId, ...rest } = row;
+    out.set(cvId, rest);
+  }
+  if (out.size !== cvs.length) {
+    throw new GeminiResponseError(
+      "Batch compatibility response missing or duplicate cvId entries",
+    );
+  }
+  for (const c of cvs) {
+    if (!out.has(c.cvId)) {
+      throw new GeminiResponseError(
+        `Batch compatibility missing result for cvId ${c.cvId}`,
+      );
+    }
+  }
+  return out;
 }
 
 export async function generateTopMatchJustificationsWithGemini(

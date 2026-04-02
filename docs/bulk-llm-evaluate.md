@@ -8,7 +8,7 @@ For every job description that has extractable text, the app:
 
 1. Ranks all CVs by **embedding similarity** (cheap, vector-based).
 2. Keeps only the **top K** matches (and optionally drops matches below an **embedding floor**).
-3. Runs the same **LLM compatibility evaluation** used on the Evaluate page for that short list of CVs.
+3. Runs the same **LLM compatibility evaluation** used on the Evaluate page for that short list of CVs (unless **batch** mode is enabled — see below).
 4. **Saves one evaluation run per job** (same storage model as a manual evaluate).
 
 So bulk mode automates “for each job, evaluate the K most similar CVs and persist the run.”
@@ -20,10 +20,16 @@ So bulk mode automates “for each job, evaluate the K most similar CVs and pers
 | `POST /api/analytics/bulk-evaluate-top-k/stream` | Streaming NDJSON progress (used by Analytics). |
 | `POST /api/analytics/bulk-evaluate-top-k` | Same work in one shot (no per-job stream). |
 
-Request body (both):
+Request body (both), validated by `bulkEvaluateTopKBodySchema` in `src/lib/bulkEvaluateTopKSchema.ts`:
 
-- `k` — integer 1–20, default `5`: max CVs per job after ranking.
-- `embeddingFloorPercent` — 0–100, default `0`: minimum embedding match score (percent) to count as a candidate.
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `k` | `5` | Integer 1–20: max CVs per job after ranking. |
+| `embeddingFloorPercent` | `0` | Minimum embedding match score (percent) to count as a candidate. |
+| `skipIfUnchanged` | `false` | If `true`, skip a job when the **latest saved evaluation run** for that job already has the **same ordered** `cvId` list as the current top‑K selection (`unchanged_since_last_run`). |
+| `useBatchedCompatibility` | `false` | If `true`, one LLM request per job containing all K résumés; if `false`, up to `EVALUATE_CV_CONCURRENCY` parallel per‑CV calls (subject to `BULK_LLM_GLOBAL_CONCURRENCY`). |
+
+The stream `complete` event includes `skipIfUnchanged` and `useBatchedCompatibility` for the client. Skips with `unchanged_since_last_run` may include `existingRunId` on `job` events.
 
 ## Step 1: Build the job × CV matrix (embeddings)
 
@@ -40,41 +46,55 @@ The result is a **matrix**: one row per job, each row an ordered list of CV matc
 
 No LLM compatibility call happens in this step—only embeddings and math.
 
-## Step 2: Iterate jobs and pick top K
+With `EVALUATE_LOG_TIMING=1`, the stream route logs a JSON line `bulk_eval` / `matrix_built` with duration and job count.
 
-Implementation: `src/app/api/analytics/bulk-evaluate-top-k/stream/route.ts` (and the non-stream route with the same loop).
+## Step 2: Jobs in parallel, top K per row
 
-For each matrix row:
+Implementation: `src/app/api/analytics/bulk-evaluate-top-k/stream/route.ts` and `src/app/api/analytics/bulk-evaluate-top-k/route.ts`.
+
+Matrix rows are processed with **`mapWithConcurrency`** (`src/lib/concurrencyPool.ts`) and **`resolveBulkJobConcurrency()`** (default **2**, env **`BULK_JOB_CONCURRENCY`**, max 16).
+
+For each row:
 
 1. **Filter** matches: not skipped, `scorePercent >= embeddingFloorPercent`.
 2. **Take** at most `k` CVs: `slice(0, k)`.
-3. If the list is empty → record **skipped** (e.g. `no_candidates_above_floor`) and continue.
-4. Otherwise call `runEvaluation({ jobDescriptionId, cvIds })`.
+3. If the list is empty → **skipped** (`no_candidates_above_floor`).
+4. If `skipIfUnchanged` and `runMatchesOrderedCvIds(latestRun, cvIds)` → **skipped** (`unchanged_since_last_run`), with `existingRunId` in the stream.
+5. Otherwise **`runEvaluation({ jobDescriptionId, cvIds }, options)`** with bulk options: `useGlobalLlmSlot: true`, `useBatchedCompatibility` from the body.
 
-The stream endpoint emits events: `matrix` → `ready` (job list + total) → per-`job` updates (`running` / `done` / `error` / `skipped`) → `complete` with `runs` and `skipped`.
-
-Jobs are processed **sequentially** (one job finishes before the next starts).
+The stream emits: `matrix` → `ready` → per-`job` events → `complete`.
 
 ## Step 3: One evaluation run per job (`runEvaluation`)
 
-Implementation: `runEvaluation` in `src/lib/evaluateRun.ts`.
+Implementation: `runEvaluation` / `evaluateJobAndCvs` in `src/lib/evaluateRun.ts`.
 
-For a single job and list of CV IDs:
+Shared steps:
 
-1. Load job metadata and **job text** once (`getJobMeta`, `readJobExtractedText`). Missing job or text throws `EvaluateError`.
-2. For **each CV ID in order** (sequential loop):
-   - Load CV metadata and **CV text** (`getCvMeta`, `readCvExtractedText`).
-   - If CV missing or no text → record a row error, continue.
-   - Else call **`evaluateCompatibilityWithProvider(jobText, cvText)`** — the actual **LLM** compatibility call (`src/lib/aiProvider` / Bedrock path).
-3. **`saveEvaluationRun`** persists one run with all per-CV results.
+1. Load job metadata and **job text** once. Missing job or text throws `EvaluateError`.
+2. **Prepare** all CV rows in parallel (`getCvMeta`, `readCvExtractedText` per id).
+3. Either:
+   - **Batch mode** (`useBatchedCompatibility`): one **`evaluateCompatibilityBatchWithProvider`** call (Bedrock or Gemini; see `src/lib/aiProvider.ts`, `bedrock.ts`, `gemini.ts`), optionally wrapped in the **global bulk semaphore** and **`withLlmThrottleRetries`**.
+   - **Parallel per-CV mode**: up to **`EVALUATE_CV_CONCURRENCY`** (default 3, max 20) concurrent **`evaluateCompatibilityWithProvider`** calls, each wrapped with throttle retries and the global semaphore when enabled.
+4. **`saveEvaluationRun`** persists one run with results in **input `cvIds` order**.
 
-So **LLM calls are also sequential within a job**: CV 1, then CV 2, … up to K.
+Interactive evaluate (`POST /api/evaluate`) does **not** set bulk options, so it uses parallel per‑CV mode with default concurrency but **no** global bulk slot pool.
+
+### Global LLM cap (bulk only)
+
+`getBulkLlmGlobalSemaphore()` in `src/lib/bulkLlmGlobalPool.ts` reads **`BULK_LLM_GLOBAL_CONCURRENCY`** (default **4**, max 64). Set to **`0`** to disable global limiting. Each in-flight compatibility call (single or batch) acquires **one** slot while running.
+
+### Retries and timing
+
+- **`withLlmThrottleRetries`** (`src/lib/llmThrottleRetry.ts`): exponential backoff on messages suggesting throttling / 429 / overload (especially for Bedrock). **`LLM_THROTTLE_MAX_RETRIES`** (default 6).
+- Gemini JSON calls still use their existing retry path inside `generateJsonText`.
+- **`EVALUATE_LOG_TIMING=1`**: JSON lines from `evaluate` (`evaluate_cv_llm`, `evaluate_batch_llm`, `evaluate_job_done`) and from bulk (`bulk_eval` / `job_eval_wall_ms`).
 
 ## Cost and throughput (mental model)
 
 - **Embedding work**: dominated by building the matrix (batch job embeddings + per-job × all-CV scoring in memory).
-- **LLM work**: roughly `(jobs with at least one candidate) × (≤ K)` calls, **all serialized** in the current design.
+- **LLM work (per-CV mode)**: up to **`BULK_JOB_CONCURRENCY` × `EVALUATE_CV_CONCURRENCY`** concurrent calls, capped by **`BULK_LLM_GLOBAL_CONCURRENCY`** when set.
+- **LLM work (batch mode)**: **one** call per job (large prompt; all K résumés truncated per CV in the batch builders).
 
-## Related UI copy
+## Related UI
 
-Analytics client: `src/app/analytics/AnalyticsClient.tsx` — button **“Bulk LLM evaluate top K”** and NDJSON stream handling for progress.
+Analytics client: `src/app/analytics/AnalyticsClient.tsx` — **Bulk LLM evaluate top K**, top K / floor inputs, **Skip unchanged**, **Batch LLM (1 call/job)**, and NDJSON stream handling.

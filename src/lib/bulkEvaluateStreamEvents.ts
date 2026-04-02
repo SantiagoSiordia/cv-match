@@ -15,6 +15,8 @@ export type BulkEvaluateStreamEvent =
       reason?: string;
       cvCount?: number;
       runId?: string;
+      /** When status is skipped and reason is unchanged_since_last_run */
+      existingRunId?: string;
     }
   | {
       type: "complete";
@@ -22,5 +24,7 @@ export type BulkEvaluateStreamEvent =
       skipped: Array<{ jobDescriptionId: string; reason: string }>;
       k: number;
       embeddingFloorPercent: number;
+      skipIfUnchanged: boolean;
+      useBatchedCompatibility: boolean;
     }
   | { type: "fatal"; code: string; message: string; status?: number };

@@ -1,15 +1,18 @@
-import { z } from "zod";
 import { jsonError, jsonOk } from "@/lib/http";
 import { buildJobCvMatrix } from "@/lib/embeddings";
 import { EvaluateError, runEvaluation } from "@/lib/evaluateRun";
 import { BedrockConfigError } from "@/lib/bedrock";
 import { isAiProviderConfigError } from "@/lib/aiProvider";
 import { EmbeddingApiError } from "@/lib/embeddings";
-
-const bodySchema = z.object({
-  k: z.number().int().min(1).max(20).default(5),
-  embeddingFloorPercent: z.number().min(0).max(100).optional().default(0),
-});
+import {
+  bulkEvaluateTopKBodySchema,
+  resolveBulkJobConcurrency,
+} from "@/lib/bulkEvaluateTopKSchema";
+import { mapWithConcurrency } from "@/lib/concurrencyPool";
+import {
+  listEvaluationRuns,
+  runMatchesOrderedCvIds,
+} from "@/lib/evaluationsStore";
 
 export async function POST(request: Request) {
   let json: unknown;
@@ -19,21 +22,35 @@ export async function POST(request: Request) {
     return jsonError(400, "INVALID_JSON", "Body must be JSON");
   }
 
-  const parsed = bodySchema.safeParse(json);
+  const parsed = bulkEvaluateTopKBodySchema.safeParse(json);
   if (!parsed.success) {
     return jsonError(400, "INVALID_BODY", "Invalid request body", {
       issues: parsed.error.flatten(),
     });
   }
 
-  const { k, embeddingFloorPercent } = parsed.data;
+  const {
+    k,
+    embeddingFloorPercent,
+    skipIfUnchanged,
+    useBatchedCompatibility,
+  } = parsed.data;
 
   try {
     const matrix = await buildJobCvMatrix();
     const runs: Array<{ jobDescriptionId: string; runId: string }> = [];
     const skipped: Array<{ jobDescriptionId: string; reason: string }> = [];
 
-    for (const row of matrix) {
+    const allRuns = skipIfUnchanged ? await listEvaluationRuns() : [];
+    const runOpts = {
+      useGlobalLlmSlot: true as const,
+      useBatchedCompatibility,
+    };
+    const jobConc = resolveBulkJobConcurrency();
+    const indices = matrix.map((_, i) => i);
+
+    await mapWithConcurrency(indices, jobConc, async (index) => {
+      const row = matrix[index]!;
       const top = row.matches
         .filter((m) => !m.skipped && m.scorePercent >= embeddingFloorPercent)
         .slice(0, k);
@@ -42,13 +59,32 @@ export async function POST(request: Request) {
           jobDescriptionId: row.jobDescriptionId,
           reason: "no_candidates_above_floor",
         });
-        continue;
+        return;
       }
+
+      const cvIds = top.map((t) => t.cvId);
+
+      if (skipIfUnchanged) {
+        const latest = allRuns.find(
+          (r) => r.jobDescriptionId === row.jobDescriptionId,
+        );
+        if (runMatchesOrderedCvIds(latest, cvIds)) {
+          skipped.push({
+            jobDescriptionId: row.jobDescriptionId,
+            reason: "unchanged_since_last_run",
+          });
+          return;
+        }
+      }
+
       try {
-        const run = await runEvaluation({
-          jobDescriptionId: row.jobDescriptionId,
-          cvIds: top.map((t) => t.cvId),
-        });
+        const run = await runEvaluation(
+          {
+            jobDescriptionId: row.jobDescriptionId,
+            cvIds,
+          },
+          runOpts,
+        );
         runs.push({
           jobDescriptionId: row.jobDescriptionId,
           runId: run.id,
@@ -59,13 +95,23 @@ export async function POST(request: Request) {
             jobDescriptionId: row.jobDescriptionId,
             reason: e.message,
           });
-          continue;
+          return;
         }
         throw e;
       }
-    }
+    });
 
-    return jsonOk({ runs, skipped, k, embeddingFloorPercent }, 201);
+    return jsonOk(
+      {
+        runs,
+        skipped,
+        k,
+        embeddingFloorPercent,
+        skipIfUnchanged,
+        useBatchedCompatibility,
+      },
+      201,
+    );
   } catch (e) {
     if (e instanceof EvaluateError) {
       return jsonError(e.status, e.code, e.message);

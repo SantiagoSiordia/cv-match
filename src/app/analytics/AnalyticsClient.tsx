@@ -61,6 +61,7 @@ type BulkJobProgressRow = {
   reason?: string;
   cvCount?: number;
   runId?: string;
+  existingRunId?: string;
 };
 
 type BulkProgressState =
@@ -225,6 +226,8 @@ export function AnalyticsClient() {
   const [backfilling, setBackfilling] = useState(false);
   const [bulkK, setBulkK] = useState(5);
   const [bulkFloor, setBulkFloor] = useState(0);
+  const [bulkSkipUnchanged, setBulkSkipUnchanged] = useState(false);
+  const [bulkUseBatchLlm, setBulkUseBatchLlm] = useState(false);
   const [bulkRunning, setBulkRunning] = useState(false);
   const [bulkProgress, setBulkProgress] = useState<BulkProgressState | null>(
     null,
@@ -359,6 +362,8 @@ export function AnalyticsClient() {
         body: JSON.stringify({
           k: bulkK,
           embeddingFloorPercent: bulkFloor,
+          skipIfUnchanged: bulkSkipUnchanged,
+          useBatchedCompatibility: bulkUseBatchLlm,
         }),
       });
 
@@ -410,6 +415,7 @@ export function AnalyticsClient() {
               reason: msg.reason,
               runId: msg.runId,
               cvCount: msg.cvCount,
+              existingRunId: msg.existingRunId,
             };
             return { ...prev, jobs };
           });
@@ -610,6 +616,26 @@ export function AnalyticsClient() {
               className="mt-1 block w-20 rounded-lg border border-zinc-200 bg-white px-2 py-1.5 text-sm disabled:opacity-60 dark:border-zinc-800 dark:bg-zinc-950"
             />
           </div>
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300">
+            <input
+              type="checkbox"
+              checked={bulkSkipUnchanged}
+              disabled={bulkRunning}
+              onChange={(e) => setBulkSkipUnchanged(e.target.checked)}
+              className="rounded border-zinc-300 dark:border-zinc-600"
+            />
+            Skip unchanged
+          </label>
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300">
+            <input
+              type="checkbox"
+              checked={bulkUseBatchLlm}
+              disabled={bulkRunning}
+              onChange={(e) => setBulkUseBatchLlm(e.target.checked)}
+              className="rounded border-zinc-300 dark:border-zinc-600"
+            />
+            Batch LLM (1 call/job)
+          </label>
           <button
             type="button"
             disabled={bulkRunning}
@@ -620,8 +646,11 @@ export function AnalyticsClient() {
           </button>
         </div>
         <p className="mt-2 text-xs text-zinc-500">
-          Bulk LLM runs one saved evaluation per job (same as Evaluate). Large
-          batches can take minutes and incur model cost.
+          Bulk LLM runs one saved evaluation per job (same as Evaluate). Use
+          Skip unchanged to avoid re-scoring when top‑K CV ids match the latest
+          run. Batch LLM sends all K résumés in one request per job (faster
+          round-trips; large prompts). Parallelism is controlled by server env
+          (see README). Large batches can take minutes and incur model cost.
         </p>
 
         {bulkProgress ? (
@@ -706,6 +735,17 @@ export function AnalyticsClient() {
                         {row.state === "skipped" && row.reason ? (
                           <span className="block text-xs text-amber-900/70 dark:text-amber-300/80">
                             Skipped — {row.reason.replace(/_/g, " ")}
+                            {row.existingRunId ? (
+                              <>
+                                {" "}
+                                <Link
+                                  href={`/dashboard/compare/${row.existingRunId}`}
+                                  className="font-medium text-amber-950 underline decoration-amber-600/60 underline-offset-2 dark:text-amber-100"
+                                >
+                                  existing run
+                                </Link>
+                              </>
+                            ) : null}
                           </span>
                         ) : null}
                         {row.state === "error" && row.reason ? (
