@@ -5,6 +5,8 @@ type PreviewModalProps = {
   title: string;
   onClose: () => void;
   children: React.ReactNode;
+  /** Wider modal (e.g. PDF preview). */
+  wide?: boolean;
 };
 
 export function PreviewModal({
@@ -12,6 +14,7 @@ export function PreviewModal({
   title,
   onClose,
   children,
+  wide = false,
 }: PreviewModalProps) {
   if (!open) return null;
   return (
@@ -27,7 +30,11 @@ export function PreviewModal({
         aria-label="Close preview"
         onClick={onClose}
       />
-      <div className="relative z-10 flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-t-2xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-800 dark:bg-zinc-950 sm:rounded-2xl">
+      <div
+        className={`relative z-10 flex max-h-[90vh] w-full flex-col overflow-hidden rounded-t-2xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-800 dark:bg-zinc-950 sm:rounded-2xl ${
+          wide ? "max-w-5xl" : "max-w-3xl"
+        }`}
+      >
         <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
           <h2 className="truncate pr-4 text-sm font-semibold text-zinc-900 dark:text-zinc-50">
             {title}
