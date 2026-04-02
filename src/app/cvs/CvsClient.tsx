@@ -3,12 +3,24 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import type { CvStoredMeta } from "@/lib/schemas";
-import type { ApiCvList, ApiErrorBody } from "@/components/ApiTypes";
+import type {
+  ApiBulkFileError,
+  ApiCvList,
+  ApiErrorBody,
+} from "@/components/ApiTypes";
 import {
   CV_SEARCH_FIELD_LABEL,
   cvMatchesSearchQuery,
 } from "@/lib/cvSearchFilter";
 import { PreviewModal } from "@/components/PreviewModal";
+
+function pdfFilesOnly(list: FileList | File[]): File[] {
+  return Array.from(list).filter(
+    (f) =>
+      f.type === "application/pdf" ||
+      f.name.toLowerCase().endsWith(".pdf"),
+  );
+}
 
 /** YYYY-MM-DD in UTC — avoids hydration mismatches from `toLocaleDateString()`. */
 function formatUploadDate(iso: string): string {
@@ -102,6 +114,7 @@ export function CvsClient() {
   const [items, setItems] = useState<CvStoredMeta[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [uploadNotice, setUploadNotice] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [previewText, setPreviewText] = useState<string | null>(null);
@@ -131,20 +144,67 @@ export function CvsClient() {
     void load();
   }, [load]);
 
-  async function onUpload(file: File) {
+  async function onUploadCvsFiles(source: FileList | File[] | null) {
+    if (!source || (source instanceof FileList ? source.length === 0 : source.length === 0)) {
+      return;
+    }
+    const rawLen = source instanceof FileList ? source.length : source.length;
+    const files = pdfFilesOnly(source);
+    if (files.length === 0) {
+      setUploadNotice(null);
+      setError(
+        rawLen > 0
+          ? "Only PDF files are supported. Non-PDF files were not uploaded."
+          : "Select at least one PDF.",
+      );
+      return;
+    }
+    const skippedNonPdf = rawLen - files.length;
+
     setUploading(true);
     setError(null);
+    setUploadNotice(null);
     const fd = new FormData();
-    fd.set("file", file);
+    for (const f of files) {
+      fd.append("files", f);
+    }
     try {
       const res = await fetch("/api/cvs", { method: "POST", body: fd });
       const json = (await res.json()) as
         | { ok: true; data: { item: CvStoredMeta } }
+        | {
+            ok: true;
+            data: { items: CvStoredMeta[]; errors: ApiBulkFileError[] };
+          }
         | ApiErrorBody;
       if (!json.ok) {
         setError(json.error.message);
         return;
       }
+
+      const { data } = json;
+      const noticeParts: string[] = [];
+      if (skippedNonPdf > 0) {
+        noticeParts.push(
+          `${skippedNonPdf} non-PDF file${skippedNonPdf === 1 ? "" : "s"} skipped.`,
+        );
+      }
+
+      if ("item" in data) {
+        if (noticeParts.length) {
+          setUploadNotice(`${noticeParts.join(" ")} Uploaded 1 résumé.`);
+        }
+      } else {
+        const { items, errors } = data;
+        noticeParts.push(`Uploaded ${items.length} résumé(s).`);
+        if (errors.length > 0) {
+          noticeParts.push(
+            `Failed: ${errors.map((e) => `${e.fileName}: ${e.message}`).join("; ")}`,
+          );
+        }
+        setUploadNotice(noticeParts.join(" "));
+      }
+
       await load();
     } catch {
       setError("Upload failed");
@@ -236,7 +296,19 @@ export function CvsClient() {
       </header>
 
       <div className="rounded-2xl border border-zinc-200/90 bg-white p-1 shadow-md shadow-zinc-900/5 dark:border-zinc-800 dark:bg-zinc-950/80 dark:shadow-none">
-        <label className="flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-zinc-200 bg-zinc-50/80 px-4 py-8 transition-colors hover:border-teal-400/60 hover:bg-teal-50/40 focus-within:outline-none focus-within:ring-2 focus-within:ring-teal-500/30 focus-within:ring-offset-2 focus-within:ring-offset-white dark:border-zinc-700 dark:bg-zinc-900/30 dark:hover:border-teal-600/50 dark:hover:bg-teal-950/20 dark:focus-within:ring-offset-zinc-950 lg:py-7">
+        <label
+          className="flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-zinc-200 bg-zinc-50/80 px-4 py-8 transition-colors hover:border-teal-400/60 hover:bg-teal-50/40 focus-within:outline-none focus-within:ring-2 focus-within:ring-teal-500/30 focus-within:ring-offset-2 focus-within:ring-offset-white dark:border-zinc-700 dark:bg-zinc-900/30 dark:hover:border-teal-600/50 dark:hover:bg-teal-950/20 dark:focus-within:ring-offset-zinc-950 lg:py-7"
+          onDragOver={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (uploading) return;
+            void onUploadCvsFiles(e.dataTransfer.files);
+          }}
+        >
           <PdfIcon className="mb-3 text-zinc-400 dark:text-zinc-500" />
           <span className="text-sm font-medium text-zinc-800 dark:text-zinc-200">
             {uploading ? (
@@ -245,21 +317,22 @@ export function CvsClient() {
                 Uploading…
               </span>
             ) : (
-              "Drop a PDF here or click to upload"
+              "Drop PDFs here or click to select one or more"
             )}
           </span>
-          <span className="mt-1.5 text-xs text-zinc-500 dark:text-zinc-400">
-            Max 10 MB · PDF only
+          <span className="mt-1.5 text-center text-xs text-zinc-500 dark:text-zinc-400">
+            Max 10 MB per file · PDF only · bulk upload supported
           </span>
           <input
             type="file"
             accept="application/pdf"
+            multiple
             className="sr-only"
             disabled={uploading}
             onChange={(e) => {
-              const f = e.target.files?.[0];
+              const list = e.target.files;
               e.target.value = "";
-              if (f) void onUpload(f);
+              void onUploadCvsFiles(list);
             }}
           />
         </label>
@@ -271,6 +344,14 @@ export function CvsClient() {
           role="alert"
         >
           {error}
+        </p>
+      ) : null}
+      {uploadNotice ? (
+        <p
+          className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-100"
+          role="status"
+        >
+          {uploadNotice}
         </p>
       ) : null}
 

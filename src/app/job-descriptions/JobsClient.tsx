@@ -2,7 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { JobStoredMeta } from "@/lib/schemas";
-import type { ApiErrorBody, ApiJobList } from "@/components/ApiTypes";
+import type {
+  ApiBulkFileError,
+  ApiErrorBody,
+  ApiJobList,
+} from "@/components/ApiTypes";
 import { PreviewModal } from "@/components/PreviewModal";
 import {
   JOB_SEARCH_FIELD_LABEL,
@@ -31,6 +35,7 @@ export function JobsClient() {
   const [items, setItems] = useState<JobStoredMeta[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [uploadNotice, setUploadNotice] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [previewText, setPreviewText] = useState<string | null>(null);
@@ -63,11 +68,19 @@ export function JobsClient() {
     void load();
   }, [load]);
 
-  async function onUpload(file: File) {
+  async function onUploadJobFiles(source: FileList | File[] | null) {
+    if (!source || (source instanceof FileList ? source.length === 0 : source.length === 0)) {
+      return;
+    }
+    const files = Array.from(source);
+
     setUploading(true);
     setError(null);
+    setUploadNotice(null);
     const fd = new FormData();
-    fd.set("file", file);
+    for (const f of files) {
+      fd.append("files", f);
+    }
     try {
       const res = await fetch("/api/job-descriptions", {
         method: "POST",
@@ -75,11 +88,30 @@ export function JobsClient() {
       });
       const json = (await res.json()) as
         | { ok: true; data: { item: JobStoredMeta } }
+        | {
+            ok: true;
+            data: { items: JobStoredMeta[]; errors: ApiBulkFileError[] };
+          }
         | ApiErrorBody;
       if (!json.ok) {
         setError(json.error.message);
         return;
       }
+
+      const { data } = json;
+      if ("item" in data) {
+        /* single-file success: no banner */
+      } else {
+        const { items, errors } = data;
+        const parts: string[] = [`Uploaded ${items.length} job description(s).`];
+        if (errors.length > 0) {
+          parts.push(
+            `Failed: ${errors.map((e) => `${e.fileName}: ${e.message}`).join("; ")}`,
+          );
+        }
+        setUploadNotice(parts.join(" "));
+      }
+
       await load();
     } catch {
       setError("Upload failed");
@@ -182,25 +214,43 @@ export function JobsClient() {
           Job descriptions
         </h1>
         <p className="mt-2 max-w-2xl text-sm text-zinc-600 dark:text-zinc-400">
-          Upload a PDF or plain-text file, or paste text below. We extract text
-          and infer a short title when possible.
+          Upload one or more PDFs or <code className="text-xs">.txt</code> files
+          (bulk supported), or paste text below. We extract text and infer a
+          short title when possible.
         </p>
       </div>
 
-      <label className="flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-zinc-300 bg-zinc-50 px-6 py-10 transition hover:border-zinc-400 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900/40 dark:hover:border-zinc-600">
+      <label
+        className="flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-zinc-300 bg-zinc-50 px-6 py-10 transition hover:border-zinc-400 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900/40 dark:hover:border-zinc-600"
+        onDragOver={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (uploading) return;
+          void onUploadJobFiles(e.dataTransfer.files);
+        }}
+      >
         <span className="text-sm font-medium text-zinc-800 dark:text-zinc-200">
-          {uploading ? "Uploading…" : "Drop PDF or .txt here or click to upload"}
+          {uploading
+            ? "Uploading…"
+            : "Drop PDFs or .txt files here or click to select multiple"}
         </span>
-        <span className="mt-1 text-xs text-zinc-500">Max 10 MB</span>
+        <span className="mt-1 text-center text-xs text-zinc-500">
+          Max 10 MB per file · PDF or plain text
+        </span>
         <input
           type="file"
           accept=".pdf,.txt,application/pdf,text/plain"
+          multiple
           className="sr-only"
           disabled={uploading}
           onChange={(e) => {
-            const f = e.target.files?.[0];
+            const list = e.target.files;
             e.target.value = "";
-            if (f) void onUpload(f);
+            void onUploadJobFiles(list);
           }}
         />
       </label>
@@ -236,6 +286,14 @@ export function JobsClient() {
       {error ? (
         <p className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
           {error}
+        </p>
+      ) : null}
+      {uploadNotice ? (
+        <p
+          className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-100"
+          role="status"
+        >
+          {uploadNotice}
         </p>
       ) : null}
 

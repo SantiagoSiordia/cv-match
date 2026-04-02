@@ -1,4 +1,5 @@
-import { jsonError, jsonOk } from "@/lib/http";
+import { jsonError, jsonOk, multipartFileList } from "@/lib/http";
+import type { CvStoredMeta } from "@/lib/schemas";
 import { listCvs, saveCvFromFile, StorageError } from "@/lib/storage";
 
 export async function GET() {
@@ -11,24 +12,76 @@ export async function GET() {
   }
 }
 
+function storageErrorStatus(e: StorageError) {
+  return e.code === "FILE_TOO_LARGE"
+    ? 413
+    : e.code === "INVALID_TYPE"
+      ? 415
+      : 400;
+}
+
 export async function POST(request: Request) {
   try {
     const formData = await request.formData();
-    const file = formData.get("file");
-    if (!file || !(file instanceof File)) {
-      return jsonError(400, "MISSING_FILE", 'Expected multipart field "file"');
+    const files = multipartFileList(formData);
+    if (files.length === 0) {
+      return jsonError(
+        400,
+        "MISSING_FILE",
+        'Expected multipart field "file" or one or more "files"',
+      );
     }
-    const meta = await saveCvFromFile(file);
-    return jsonOk({ item: meta }, 201);
-  } catch (e) {
-    if (e instanceof StorageError) {
+
+    const items: CvStoredMeta[] = [];
+    const errors: { fileName: string; code: string; message: string }[] = [];
+
+    for (const file of files) {
+      try {
+        items.push(await saveCvFromFile(file));
+      } catch (e) {
+        const fileName = file.name || "unnamed";
+        if (e instanceof StorageError) {
+          errors.push({ fileName, code: e.code, message: e.message });
+        } else {
+          errors.push({
+            fileName,
+            code: "UPLOAD_FAILED",
+            message: e instanceof Error ? e.message : "Could not save CV",
+          });
+        }
+      }
+    }
+
+    if (files.length === 1) {
+      if (items.length === 1) {
+        return jsonOk({ item: items[0]! }, 201);
+      }
+      const er = errors[0]!;
       const status =
-        e.code === "FILE_TOO_LARGE"
+        er.code === "FILE_TOO_LARGE"
           ? 413
-          : e.code === "INVALID_TYPE"
+          : er.code === "INVALID_TYPE"
             ? 415
             : 400;
-      return jsonError(status, e.code, e.message);
+      return jsonError(status, er.code, er.message);
+    }
+
+    if (items.length === 0) {
+      const first = errors[0]!;
+      return jsonError(
+        400,
+        "ALL_FAILED",
+        errors.length === 1
+          ? first.message
+          : `All ${errors.length} uploads failed`,
+        { errors },
+      );
+    }
+
+    return jsonOk({ items, errors }, 201);
+  } catch (e) {
+    if (e instanceof StorageError) {
+      return jsonError(storageErrorStatus(e), e.code, e.message);
     }
     console.error(e);
     return jsonError(500, "UPLOAD_FAILED", "Could not save CV");

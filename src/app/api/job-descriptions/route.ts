@@ -1,4 +1,5 @@
-import { jsonError, jsonOk } from "@/lib/http";
+import { jsonError, jsonOk, multipartFileList } from "@/lib/http";
+import type { JobStoredMeta } from "@/lib/schemas";
 import {
   listJobDescriptions,
   saveJobDescriptionFromFile,
@@ -55,12 +56,62 @@ export async function POST(request: Request) {
 
   try {
     const formData = await request.formData();
-    const file = formData.get("file");
-    if (!file || !(file instanceof File)) {
-      return jsonError(400, "MISSING_FILE", 'Expected multipart field "file"');
+    const files = multipartFileList(formData);
+    if (files.length === 0) {
+      return jsonError(
+        400,
+        "MISSING_FILE",
+        'Expected multipart field "file" or one or more "files"',
+      );
     }
-    const meta = await saveJobDescriptionFromFile(file);
-    return jsonOk({ item: meta }, 201);
+
+    const items: JobStoredMeta[] = [];
+    const errors: { fileName: string; code: string; message: string }[] = [];
+
+    for (const file of files) {
+      try {
+        items.push(await saveJobDescriptionFromFile(file));
+      } catch (e) {
+        const fileName = file.name || "unnamed";
+        if (e instanceof StorageError) {
+          errors.push({ fileName, code: e.code, message: e.message });
+        } else {
+          errors.push({
+            fileName,
+            code: "UPLOAD_FAILED",
+            message:
+              e instanceof Error ? e.message : "Could not save job description",
+          });
+        }
+      }
+    }
+
+    if (files.length === 1) {
+      if (items.length === 1) {
+        return jsonOk({ item: items[0]! }, 201);
+      }
+      const er = errors[0]!;
+      const status =
+        er.code === "FILE_TOO_LARGE"
+          ? 413
+          : er.code === "INVALID_TYPE"
+            ? 415
+            : 400;
+      return jsonError(status, er.code, er.message);
+    }
+
+    if (items.length === 0) {
+      return jsonError(
+        400,
+        "ALL_FAILED",
+        errors.length === 1
+          ? errors[0]!.message
+          : `All ${errors.length} uploads failed`,
+        { errors },
+      );
+    }
+
+    return jsonOk({ items, errors }, 201);
   } catch (e) {
     if (e instanceof StorageError) {
       const status =
