@@ -14,7 +14,9 @@ import {
 } from "@/lib/storage";
 import {
   SEED_DEFAULT_MAX_CV_FILES,
+  SEED_DEFAULT_MAX_JD_LINES,
   SEED_MAX_CV_FILES_CAP,
+  SEED_MAX_JD_LINES_CAP,
 } from "@/lib/seedLimits";
 
 export type SeedProgressEvent =
@@ -45,7 +47,9 @@ export type SeedProgressEvent =
 
 export {
   SEED_DEFAULT_MAX_CV_FILES,
+  SEED_DEFAULT_MAX_JD_LINES,
   SEED_MAX_CV_FILES_CAP,
+  SEED_MAX_JD_LINES_CAP,
 } from "@/lib/seedLimits";
 
 const DEFAULT_JD_RELATIVE = "scripts/seed/tcs-jds-1500.jsonl";
@@ -93,6 +97,49 @@ export function parseSeedMaxCvFilesRequest(raw: unknown):
   return { ok: true, value: n };
 }
 
+/**
+ * Parse optional `maxJdLines` from API/CLI (integer 1..SEED_MAX_JD_LINES_CAP).
+ * Omitted → default count. Only the first N non-empty JSONL lines are ingested.
+ */
+export function parseSeedMaxJdLinesRequest(raw: unknown):
+  | { ok: true; value: number }
+  | { ok: false; message: string } {
+  if (raw === undefined || raw === null) {
+    return { ok: true, value: SEED_DEFAULT_MAX_JD_LINES };
+  }
+  let n: number;
+  if (typeof raw === "number") {
+    if (!Number.isInteger(raw)) {
+      return {
+        ok: false,
+        message: `maxJdLines must be a whole number between 1 and ${SEED_MAX_JD_LINES_CAP}.`,
+      };
+    }
+    n = raw;
+  } else if (typeof raw === "string") {
+    const t = raw.trim();
+    if (!/^\d+$/.test(t)) {
+      return {
+        ok: false,
+        message: `maxJdLines must be an integer between 1 and ${SEED_MAX_JD_LINES_CAP}.`,
+      };
+    }
+    n = parseInt(t, 10);
+  } else {
+    return {
+      ok: false,
+      message: `maxJdLines must be an integer between 1 and ${SEED_MAX_JD_LINES_CAP}.`,
+    };
+  }
+  if (n < 1 || n > SEED_MAX_JD_LINES_CAP) {
+    return {
+      ok: false,
+      message: `maxJdLines must be between 1 and ${SEED_MAX_JD_LINES_CAP}.`,
+    };
+  }
+  return { ok: true, value: n };
+}
+
 type Row = { title?: string; body?: string };
 
 function seedCvConcurrency(): number {
@@ -118,6 +165,7 @@ export async function runFullSeed(
   options: {
     jdJsonlRelativePath?: string;
     maxCvFiles?: number;
+    maxJdLines?: number;
     cvConcurrency?: number;
   } = {},
 ): Promise<{
@@ -132,6 +180,13 @@ export async function runFullSeed(
     throw new Error(parsed.message);
   }
   const maxCvFiles = parsed.value;
+
+  const parsedJd = parseSeedMaxJdLinesRequest(options.maxJdLines);
+  if (!parsedJd.ok) {
+    throw new Error(parsedJd.message);
+  }
+  const maxJdLines = parsedJd.value;
+
   const conc = Math.max(
     1,
     Math.min(
@@ -149,7 +204,10 @@ export async function runFullSeed(
 
     const jdAbs = path.join(process.cwd(), jdRel);
     const raw = await readFile(jdAbs, "utf8");
-    const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+    const lines = raw
+      .split(/\r?\n/)
+      .filter((l) => l.trim().length > 0)
+      .slice(0, maxJdLines);
 
     let jdOk = 0;
     let jdFailed = 0;

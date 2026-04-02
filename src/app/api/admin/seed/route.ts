@@ -1,5 +1,6 @@
 import {
   parseSeedMaxCvFilesRequest,
+  parseSeedMaxJdLinesRequest,
   runFullSeed,
 } from "@/lib/fullSeed";
 
@@ -26,7 +27,7 @@ export async function GET() {
       error: {
         code: "METHOD_NOT_ALLOWED",
         message:
-          'Use POST with JSON body { "confirm": "DELETE", "maxCvFiles"?: number } to start seeding.',
+          'Use POST with JSON body { "confirm": "DELETE", "maxCvFiles"?: number, "maxJdLines"?: number } to start seeding.',
       },
     },
     { status: 405 },
@@ -67,6 +68,22 @@ export async function POST(request: Request) {
   }
   const maxCvFiles = maxParsed.value;
 
+  const rawMaxJd =
+    body && typeof body === "object" && "maxJdLines" in body
+      ? (body as { maxJdLines?: unknown }).maxJdLines
+      : undefined;
+  const jdParsed = parseSeedMaxJdLinesRequest(rawMaxJd);
+  if (!jdParsed.ok) {
+    return Response.json(
+      {
+        ok: false as const,
+        error: { code: "BAD_MAX_JD_LINES", message: jdParsed.message },
+      },
+      { status: 400 },
+    );
+  }
+  const maxJdLines = jdParsed.value;
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -77,7 +94,7 @@ export async function POST(request: Request) {
               encoder.encode(`${JSON.stringify(e)}\n`),
             );
           },
-          { maxCvFiles },
+          { maxCvFiles, maxJdLines },
         );
       } catch {
         /* runFullSeed emits phase "error" before rethrowing */

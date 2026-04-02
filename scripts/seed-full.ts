@@ -1,8 +1,11 @@
 /**
- * Full wipe + JD JSONL seed + up to N CV PDFs (default 1500, max 5000).
+ * Full wipe + JD JSONL seed + up to N CV PDFs (defaults 1500 each, max 5000).
  *
  *   npx tsx scripts/seed-full.ts
  *   npx tsx scripts/seed-full.ts 50
+ *   npx tsx scripts/seed-full.ts 1500 50
+ *
+ * Args: [maxCvFiles] [maxJdLines] — omit trailing args for defaults.
  *
  * Requires .env with Bedrock and/or Gemini (same routing as the app).
  */
@@ -11,6 +14,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
   parseSeedMaxCvFilesRequest,
+  parseSeedMaxJdLinesRequest,
   runFullSeed,
 } from "../src/lib/fullSeed";
 
@@ -40,19 +44,27 @@ function loadDotEnv() {
 
 async function main() {
   loadDotEnv();
-  const arg = process.argv[2];
+  const argCv = process.argv[2];
+  const argJd = process.argv[3];
   const maxParsed = parseSeedMaxCvFilesRequest(
-    arg === undefined ? undefined : arg,
+    argCv === undefined ? undefined : argCv,
   );
   if (!maxParsed.ok) {
     console.error(maxParsed.message);
+    process.exit(1);
+  }
+  const jdParsed = parseSeedMaxJdLinesRequest(
+    argJd === undefined ? undefined : argJd,
+  );
+  if (!jdParsed.ok) {
+    console.error(jdParsed.message);
     process.exit(1);
   }
   await runFullSeed(
     (e) => {
       console.error(JSON.stringify(e));
     },
-    { maxCvFiles: maxParsed.value },
+    { maxCvFiles: maxParsed.value, maxJdLines: jdParsed.value },
   );
 }
 

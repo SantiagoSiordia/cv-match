@@ -10,7 +10,9 @@ import {
 } from "@/lib/cvSearchFilter";
 import {
   SEED_DEFAULT_MAX_CV_FILES,
+  SEED_DEFAULT_MAX_JD_LINES,
   SEED_MAX_CV_FILES_CAP,
+  SEED_MAX_JD_LINES_CAP,
 } from "@/lib/seedLimits";
 import { PreviewModal } from "@/components/PreviewModal";
 
@@ -57,11 +59,11 @@ function formatSeedLine(raw: unknown): string {
   }
 }
 
-function parseSeedCvCountInput(s: string): number | null {
+function parseSeedCountInput(s: string, cap: number): number | null {
   const t = s.trim();
   if (!/^\d+$/.test(t)) return null;
   const n = parseInt(t, 10);
-  if (n < 1 || n > SEED_MAX_CV_FILES_CAP) return null;
+  if (n < 1 || n > cap) return null;
   return n;
 }
 
@@ -71,20 +73,41 @@ function SeedDatasetPanel({ load }: { load: () => Promise<void> }) {
   const [maxCvFilesInput, setMaxCvFilesInput] = useState(
     String(SEED_DEFAULT_MAX_CV_FILES),
   );
+  const [maxJdLinesInput, setMaxJdLinesInput] = useState(
+    String(SEED_DEFAULT_MAX_JD_LINES),
+  );
   const [busy, setBusy] = useState(false);
   const [log, setLog] = useState<string[]>([]);
   const [banner, setBanner] = useState<string | null>(null);
 
-  const maxCvFiles = parseSeedCvCountInput(maxCvFilesInput);
-  const canRun = confirmText === "DELETE" && maxCvFiles !== null && !busy;
+  const maxCvFiles = parseSeedCountInput(
+    maxCvFilesInput,
+    SEED_MAX_CV_FILES_CAP,
+  );
+  const maxJdLines = parseSeedCountInput(
+    maxJdLinesInput,
+    SEED_MAX_JD_LINES_CAP,
+  );
+  const canRun =
+    confirmText === "DELETE" &&
+    maxCvFiles !== null &&
+    maxJdLines !== null &&
+    !busy;
 
   async function runSeed() {
     if (busy) return;
     if (confirmText !== "DELETE") return;
-    const n = parseSeedCvCountInput(maxCvFilesInput);
+    const n = parseSeedCountInput(maxCvFilesInput, SEED_MAX_CV_FILES_CAP);
     if (n === null) {
       setBanner(
         `Enter a whole number of CVs between 1 and ${SEED_MAX_CV_FILES_CAP}.`,
+      );
+      return;
+    }
+    const jd = parseSeedCountInput(maxJdLinesInput, SEED_MAX_JD_LINES_CAP);
+    if (jd === null) {
+      setBanner(
+        `Enter a whole number of job descriptions (JSONL lines) between 1 and ${SEED_MAX_JD_LINES_CAP}.`,
       );
       return;
     }
@@ -97,7 +120,11 @@ function SeedDatasetPanel({ load }: { load: () => Promise<void> }) {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ confirm: "DELETE", maxCvFiles: n }),
+        body: JSON.stringify({
+          confirm: "DELETE",
+          maxCvFiles: n,
+          maxJdLines: jd,
+        }),
       });
       if (!res.ok) {
         const j = (await res.json().catch(() => null)) as
@@ -188,11 +215,13 @@ function SeedDatasetPanel({ load }: { load: () => Promise<void> }) {
       </div>
       <p className="mt-2 text-xs text-amber-900/90 dark:text-amber-200/90">
         Deletes <strong className="font-medium">all</strong> CVs and job
-        descriptions, then imports ~1500 JDs from{" "}
+        descriptions, then imports up to the number of JSONL lines you set
+        below from{" "}
         <code className="rounded bg-amber-100/80 px-1 dark:bg-amber-950">
           scripts/seed/tcs-jds-1500.jsonl
         </code>{" "}
-        and up to the number of PDF résumés you set below (default{" "}
+        (default {SEED_DEFAULT_MAX_JD_LINES}, max {SEED_MAX_JD_LINES_CAP}), and
+        up to the number of PDF résumés you set (default{" "}
         {SEED_DEFAULT_MAX_CV_FILES}, max {SEED_MAX_CV_FILES_CAP}) from the
         public curriculum_vitae_data repo with AI metadata per file (Bedrock
         preferred, else Gemini; slow and many model calls).{" "}
@@ -203,6 +232,24 @@ function SeedDatasetPanel({ load }: { load: () => Promise<void> }) {
       </p>
       {open ? (
         <div className="mt-4 space-y-3 border-t border-amber-200/80 pt-4 dark:border-amber-800/60">
+          <label className="block text-xs font-medium text-amber-950 dark:text-amber-100">
+            Job descriptions to import (JSONL lines)
+            <input
+              type="number"
+              inputMode="numeric"
+              min={1}
+              max={SEED_MAX_JD_LINES_CAP}
+              step={1}
+              value={maxJdLinesInput}
+              onChange={(e) => setMaxJdLinesInput(e.target.value)}
+              disabled={busy}
+              className="mt-1 w-full max-w-[12rem] rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm text-zinc-900 dark:border-amber-800 dark:bg-zinc-950 dark:text-zinc-100"
+            />
+            <span className="mt-1 block font-normal text-amber-800/90 dark:text-amber-200/80">
+              1–{SEED_MAX_JD_LINES_CAP} (default {SEED_DEFAULT_MAX_JD_LINES}).
+              Fewer lines than requested if the file is shorter.
+            </span>
+          </label>
           <label className="block text-xs font-medium text-amber-950 dark:text-amber-100">
             Number of CV PDFs to import
             <input
