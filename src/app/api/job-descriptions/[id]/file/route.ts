@@ -18,8 +18,17 @@ export async function GET(
   try {
     const buf = await readFile(filePath);
     const isPdf = meta.mimeType === "application/pdf";
-    const contentType = isPdf ? "application/pdf" : "text/plain; charset=utf-8";
-    const fallbackName = isPdf ? "job-description.pdf" : "job-description.txt";
+    const isJson = meta.mimeType === "application/json";
+    const contentType = isPdf
+      ? "application/pdf"
+      : isJson
+        ? "application/json; charset=utf-8"
+        : "text/plain; charset=utf-8";
+    const fallbackName = isPdf
+      ? "job-description.pdf"
+      : isJson
+        ? "job-description.json"
+        : "job-description.txt";
     const name = meta.originalName || fallbackName;
     return new Response(buf, {
       headers: {

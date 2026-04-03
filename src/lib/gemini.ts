@@ -44,6 +44,14 @@ function sleep(ms: number): Promise<void> {
 
 function isRetryableGeminiError(e: unknown): boolean {
   const msg = e instanceof Error ? e.message : String(e);
+  /** Billing / daily quota: retries only burn calls and clutter logs. */
+  if (
+    /exceeded your current quota|check your plan and billing|billing details/i.test(
+      msg,
+    )
+  ) {
+    return false;
+  }
   if (
     /503|502|504|429|UNAVAILABLE|RESOURCE_EXHAUSTED|high demand|try again later|overloaded|rate limit|EAI_AGAIN|fetch failed|network/i.test(
       msg,

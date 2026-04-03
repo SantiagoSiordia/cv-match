@@ -106,6 +106,12 @@ export const jobStoredMetaSchema = z.object({
   geminiError: z.string().optional(),
   /** Normalized concat for client search (file, title, body prefix, etc.). */
   searchIndex: z.string().optional(),
+  /** Provenance: pasted text, uploaded file, or one row from a CSV import. */
+  sourceKind: z.enum(["file", "text", "csv_row"]).optional(),
+  /** Full column map when `sourceKind` is `csv_row`. */
+  structuredFields: z.record(z.string(), z.string()).optional(),
+  /** Staffing export `Requirement Id` when present. */
+  sourceRequirementId: z.string().optional(),
 });
 
 export type JobStoredMeta = z.infer<typeof jobStoredMetaSchema>;

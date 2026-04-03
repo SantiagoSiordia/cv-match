@@ -28,6 +28,7 @@ import {
   readCvExtractedText,
   readJobExtractedText,
 } from "@/lib/storage";
+import { applyTechnicalJobMatchOrdering } from "@/lib/technicalRoleRanking";
 
 export class EmbeddingApiError extends Error {
   constructor(message: string) {
@@ -111,6 +112,9 @@ export function cosineToPercent(sim: number): number {
 type JobIndexEntry = {
   fingerprint: string;
   values: number[];
+  /** Cached RETRIEVAL_QUERY vector for the same job text (see `buildJobCvMatrix`). */
+  queryFingerprint?: string;
+  queryValues?: number[];
 };
 
 type JobIndexFile = {
@@ -308,10 +312,15 @@ export async function ensureJobEmbeddingIndex(): Promise<JobIndexFile> {
   const jobs = await listJobDescriptions();
   let index = await loadJobIndex();
 
-  const toEmbed: Array<{
+  const toEmbedDoc: Array<{
     id: string;
     text: string;
     title: string;
+    fingerprint: string;
+  }> = [];
+  const toEmbedQueryOnly: Array<{
+    id: string;
+    text: string;
     fingerprint: string;
   }> = [];
 
@@ -320,27 +329,69 @@ export async function ensureJobEmbeddingIndex(): Promise<JobIndexFile> {
     if (!text.trim()) continue;
     const fp = fingerprintText(text);
     const existing = index.entries[job.id];
-    if (existing && existing.fingerprint === fp && existing.values.length > 0) {
-      continue;
-    }
+    const hasDoc =
+      !!existing &&
+      existing.fingerprint === fp &&
+      existing.values.length > 0;
+    const hasQuery =
+      !!existing &&
+      existing.queryFingerprint === fp &&
+      (existing.queryValues?.length ?? 0) > 0;
+    if (hasDoc && hasQuery) continue;
     const title =
       job.titleGuess?.trim() ||
       job.originalName.replace(/\.[^.]+$/, "") ||
       "Job";
-    toEmbed.push({ id: job.id, text, title, fingerprint: fp });
+    if (!hasDoc) {
+      toEmbedDoc.push({ id: job.id, text, title, fingerprint: fp });
+    } else {
+      toEmbedQueryOnly.push({ id: job.id, text, fingerprint: fp });
+    }
   }
 
   const batchSize = 100;
-  for (let i = 0; i < toEmbed.length; i += batchSize) {
-    const chunk = toEmbed.slice(i, i + batchSize);
-    const vectors = await batchEmbedContents(
+  for (let i = 0; i < toEmbedDoc.length; i += batchSize) {
+    const chunk = toEmbedDoc.slice(i, i + batchSize);
+    const docVectors = await batchEmbedContents(
       chunk.map((c) => ({
         text: c.text,
         taskType: "RETRIEVAL_DOCUMENT" as const,
         title: c.title,
       })),
     );
-    const key = indexKeyForVector(vectors[0]!);
+    const key = indexKeyForVector(docVectors[0]!);
+    if (index.model !== key) {
+      lockedEmbedBackend = null;
+      index = { model: key, entries: {} };
+      await saveJobIndex(index);
+      return ensureJobEmbeddingIndex();
+    }
+    const queryVectors = await batchEmbedContents(
+      chunk.map((c) => ({
+        text: c.text,
+        taskType: "RETRIEVAL_QUERY" as const,
+      })),
+    );
+    for (let j = 0; j < chunk.length; j++) {
+      const c = chunk[j]!;
+      index.entries[c.id] = {
+        fingerprint: c.fingerprint,
+        values: docVectors[j]!,
+        queryFingerprint: c.fingerprint,
+        queryValues: queryVectors[j]!,
+      };
+    }
+  }
+
+  for (let i = 0; i < toEmbedQueryOnly.length; i += batchSize) {
+    const chunk = toEmbedQueryOnly.slice(i, i + batchSize);
+    const queryVectors = await batchEmbedContents(
+      chunk.map((c) => ({
+        text: c.text,
+        taskType: "RETRIEVAL_QUERY" as const,
+      })),
+    );
+    const key = indexKeyForVector(queryVectors[0]!);
     if (index.model !== key) {
       lockedEmbedBackend = null;
       index = { model: key, entries: {} };
@@ -349,9 +400,12 @@ export async function ensureJobEmbeddingIndex(): Promise<JobIndexFile> {
     }
     for (let j = 0; j < chunk.length; j++) {
       const c = chunk[j]!;
+      const prev = index.entries[c.id];
+      if (!prev) continue;
       index.entries[c.id] = {
-        fingerprint: c.fingerprint,
-        values: vectors[j]!,
+        ...prev,
+        queryFingerprint: c.fingerprint,
+        queryValues: queryVectors[j]!,
       };
     }
   }
@@ -531,9 +585,11 @@ export async function rankCvsAgainstJob(
 
   const cvs = await listCvs();
   const rows: CvMatchRow[] = [];
+  const cvTextById = new Map<string, string>();
 
   for (const cv of cvs) {
-    const cvText = await readCvExtractedText(cv.id);
+    const cvText = (await readCvExtractedText(cv.id)) ?? "";
+    cvTextById.set(cv.id, cvText);
     if (!cvText?.trim()) {
       rows.push({
         cvId: cv.id,
@@ -578,7 +634,19 @@ export async function rankCvsAgainstJob(
   }
 
   rows.sort(compareCvMatchRowsForRanking);
-  return rows;
+  const cvById = new Map(cvs.map((c) => [c.id, c]));
+  const displayTitle =
+    jobFromMeta.titleGuess?.trim() ||
+    jobFromMeta.originalName.replace(/\.[^.]+$/, "") ||
+    "Job";
+  return applyTechnicalJobMatchOrdering(
+    jobFromMeta,
+    displayTitle,
+    rows,
+    cvById,
+    compareCvMatchRowsForRanking,
+    cvTextById,
+  );
 }
 
 export type JobCvMatrixRow = {
@@ -588,11 +656,13 @@ export type JobCvMatrixRow = {
 };
 
 /**
- * Full job × CV embedding ranks in one pass (batched job query embeddings).
+ * Full job × CV embedding ranks in one pass.
+ * Uses cached per-job RETRIEVAL_QUERY vectors from the job index when possible
+ * so analytics does not re-embed every job on every request.
  */
 export async function buildJobCvMatrix(): Promise<JobCvMatrixRow[]> {
   const cvIndex = await ensureCvEmbeddingIndex();
-  await ensureJobEmbeddingIndex();
+  const jobIndex = await loadJobIndex();
   const jobs = await listJobDescriptions();
   const cvs = await listCvs();
 
@@ -610,12 +680,45 @@ export async function buildJobCvMatrix(): Promise<JobCvMatrixRow[]> {
     return [];
   }
 
-  const queryVectors = await batchEmbedContents(
-    withText.map((w) => ({
-      text: w.text,
-      taskType: "RETRIEVAL_QUERY" as const,
-    })),
-  );
+  const queryVectors: number[][] = new Array(withText.length);
+  const missingQuery: Array<{ i: number; id: string; text: string }> = [];
+  for (let i = 0; i < withText.length; i++) {
+    const w = withText[i]!;
+    const fp = fingerprintText(w.text);
+    const ent = jobIndex.entries[w.job.id];
+    if (
+      ent?.queryValues?.length &&
+      ent.queryFingerprint === fp
+    ) {
+      queryVectors[i] = ent.queryValues;
+    } else {
+      missingQuery.push({ i, id: w.job.id, text: w.text });
+    }
+  }
+
+  if (missingQuery.length > 0) {
+    const newVecs = await batchEmbedContents(
+      missingQuery.map((m) => ({
+        text: m.text,
+        taskType: "RETRIEVAL_QUERY" as const,
+      })),
+    );
+    for (let j = 0; j < missingQuery.length; j++) {
+      const m = missingQuery[j]!;
+      const vec = newVecs[j]!;
+      queryVectors[m.i] = vec;
+      const fp = fingerprintText(m.text);
+      const ent = jobIndex.entries[m.id];
+      if (ent) {
+        jobIndex.entries[m.id] = {
+          ...ent,
+          queryFingerprint: fp,
+          queryValues: vec,
+        };
+      }
+    }
+    await saveJobIndex(jobIndex);
+  }
 
   const cvList = await Promise.all(
     cvs.map(async (cv) => ({
@@ -679,10 +782,20 @@ export async function buildJobCvMatrix(): Promise<JobCvMatrixRow[]> {
       });
     }
     matches.sort(compareCvMatchRowsForRanking);
+    const cvById = new Map(cvs.map((c) => [c.id, c]));
+    const cvTextById = new Map(cvList.map(({ meta, text }) => [meta.id, text]));
+    const ordered = applyTechnicalJobMatchOrdering(
+      job,
+      title,
+      matches,
+      cvById,
+      compareCvMatchRowsForRanking,
+      cvTextById,
+    );
     out.push({
       jobDescriptionId: job.id,
       jobTitle: title,
-      matches,
+      matches: ordered,
     });
   }
 

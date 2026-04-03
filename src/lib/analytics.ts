@@ -37,20 +37,6 @@ function bestEmbeddingFromMatches(row: JobCvMatrixRow): {
   };
 }
 
-function runsByLatestPerJob(runs: EvaluationRun[]): Map<string, EvaluationRun> {
-  const map = new Map<string, EvaluationRun>();
-  for (const run of runs) {
-    const prev = map.get(run.jobDescriptionId);
-    if (
-      !prev ||
-      new Date(run.createdAt).getTime() > new Date(prev.createdAt).getTime()
-    ) {
-      map.set(run.jobDescriptionId, run);
-    }
-  }
-  return map;
-}
-
 function bestLlmFromRun(run: EvaluationRun): {
   cvId: string;
   cvName: string;
@@ -70,6 +56,25 @@ function bestLlmFromRun(run: EvaluationRun): {
     }
   }
   return best;
+}
+
+/**
+ * For each job, pick the newest run that has at least one scored compatibility row.
+ * If we only used the globally newest run per job, a failed or all-error re-run would
+ * hide older successful scores in the analytics LLM column.
+ */
+function newestUsableLlmRunByJob(runs: EvaluationRun[]): Map<string, EvaluationRun> {
+  const sorted = [...runs].sort(
+    (a, b) =>
+      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+  );
+  const map = new Map<string, EvaluationRun>();
+  for (const run of sorted) {
+    const jid = run.jobDescriptionId;
+    if (map.has(jid)) continue;
+    if (bestLlmFromRun(run) !== null) map.set(jid, run);
+  }
+  return map;
 }
 
 function countStrongEmbedding(
@@ -151,6 +156,8 @@ export type AnalyticsOverview = {
       cvName: string;
       scorePercent: number;
     }>;
+    /** LLM-extracted hard skills for the #1 embedding match (same CV as bestEmbedding). */
+    topMatchSkills: string[];
   }>;
   trainingOpportunities: TrainingOpportunity[];
 };
@@ -220,7 +227,7 @@ export async function computeAnalyticsOverview(input: {
     readCvEmbeddingIndexSnapshot(),
   ]);
 
-  const latestByJob = runsByLatestPerJob(runs);
+  const newestUsableLlmByJob = newestUsableLlmRunByJob(runs);
   const jobTitleById = new Map(
     jobs.map((j) => [
       j.id,
@@ -243,6 +250,8 @@ export async function computeAnalyticsOverview(input: {
     (r) => new Date(r.createdAt).getTime() >= sevenDaysAgo,
   ).length;
 
+  const cvById = new Map(cvs.map((cv) => [cv.id, cv] as const));
+
   const closableEmbeddingJobs: AnalyticsOverview["closableByEmbedding"]["jobs"] =
     [];
   for (const row of matrix) {
@@ -264,7 +273,7 @@ export async function computeAnalyticsOverview(input: {
   }
 
   const closableLlmJobs: AnalyticsOverview["closableByLlm"]["jobs"] = [];
-  for (const [jobId, run] of latestByJob) {
+  for (const [jobId, run] of newestUsableLlmByJob) {
     const title = jobTitleById.get(jobId) ?? "Job";
     let countAbove = 0;
     for (const r of run.results) {
@@ -296,8 +305,8 @@ export async function computeAnalyticsOverview(input: {
       job.originalName.replace(/\.[^.]+$/, "") ||
       "Job";
     const bestEmb = row ? bestEmbeddingFromMatches(row) : null;
-    const latest = latestByJob.get(job.id);
-    const bestL = latest ? bestLlmFromRun(latest) : null;
+    const llmRun = newestUsableLlmByJob.get(job.id);
+    const bestL = llmRun ? bestLlmFromRun(llmRun) : null;
     const top3 =
       row?.matches
         .filter((m) => !m.skipped)
@@ -307,6 +316,12 @@ export async function computeAnalyticsOverview(input: {
           cvName: m.cvOriginalName,
           scorePercent: m.scorePercent,
         })) ?? [];
+    const topMatchSkills =
+      bestEmb != null
+        ? (cvById.get(bestEmb.cvId)?.gemini?.hardSkills ?? []).filter(
+            (s): s is string => typeof s === "string" && s.trim().length > 0,
+          )
+        : [];
     return {
       jobDescriptionId: job.id,
       jobTitle: title,
@@ -317,15 +332,16 @@ export async function computeAnalyticsOverview(input: {
             scorePercent: bestEmb.scorePercent,
           }
         : null,
-      bestLlm: bestL && latest
+      bestLlm: bestL && llmRun
         ? {
             cvId: bestL.cvId,
             cvName: bestL.cvName,
             overallScore: bestL.overallScore,
-            runId: latest.id,
+            runId: llmRun.id,
           }
         : null,
       top3Embedding: top3,
+      topMatchSkills,
     };
   });
 

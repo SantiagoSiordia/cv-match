@@ -110,12 +110,44 @@ function Spinner({ className = "h-4 w-4" }: { className?: string }) {
   );
 }
 
+type CvUploadPhase =
+  | { phase: "sending"; percent: number | null; fileCount: number }
+  | { phase: "processing"; fileCount: number };
+
+function postFormDataWithUploadProgress(
+  url: string,
+  formData: FormData,
+  onProgress: (loaded: number, total: number, lengthComputable: boolean) => void,
+  onUploadComplete: () => void,
+): Promise<{ status: number; responseText: string }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.responseType = "text";
+    xhr.upload.addEventListener("progress", (e) => {
+      onProgress(e.loaded, e.total, e.lengthComputable);
+    });
+    xhr.upload.addEventListener("load", onUploadComplete);
+    xhr.addEventListener("load", () => {
+      resolve({ status: xhr.status, responseText: xhr.responseText });
+    });
+    xhr.addEventListener("error", () => {
+      reject(new Error("Network error"));
+    });
+    xhr.addEventListener("abort", () => {
+      reject(new Error("Aborted"));
+    });
+    xhr.send(formData);
+  });
+}
+
 export function CvsClient() {
   const [items, setItems] = useState<CvStoredMeta[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [uploadNotice, setUploadNotice] = useState<string | null>(null);
-  const [uploading, setUploading] = useState(false);
+  const [uploadPhase, setUploadPhase] = useState<CvUploadPhase | null>(null);
+  const uploading = uploadPhase !== null;
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [previewText, setPreviewText] = useState<string | null>(null);
   const [resumeQuery, setResumeQuery] = useState("");
@@ -161,7 +193,11 @@ export function CvsClient() {
     }
     const skippedNonPdf = rawLen - files.length;
 
-    setUploading(true);
+    setUploadPhase({
+      phase: "sending",
+      percent: null,
+      fileCount: files.length,
+    });
     setError(null);
     setUploadNotice(null);
     const fd = new FormData();
@@ -169,20 +205,51 @@ export function CvsClient() {
       fd.append("files", f);
     }
     try {
-      const res = await fetch("/api/cvs", { method: "POST", body: fd });
-      const json = (await res.json()) as
+      const { responseText } = await postFormDataWithUploadProgress(
+        "/api/cvs",
+        fd,
+        (_loaded, total, lengthComputable) => {
+          setUploadPhase((prev) => {
+            if (!prev || prev.phase !== "sending") return prev;
+            const fileCount = prev.fileCount;
+            const percent =
+              lengthComputable && total > 0
+                ? Math.min(100, Math.round((100 * _loaded) / total))
+                : null;
+            return { phase: "sending", percent, fileCount };
+          });
+        },
+        () => {
+          setUploadPhase((prev) =>
+            prev?.phase === "sending"
+              ? { phase: "processing", fileCount: prev.fileCount }
+              : prev,
+          );
+        },
+      );
+
+      let json: unknown;
+      try {
+        json = JSON.parse(responseText) as unknown;
+      } catch {
+        setError("Upload failed");
+        return;
+      }
+
+      const parsed = json as
         | { ok: true; data: { item: CvStoredMeta } }
         | {
             ok: true;
             data: { items: CvStoredMeta[]; errors: ApiBulkFileError[] };
           }
         | ApiErrorBody;
-      if (!json.ok) {
-        setError(json.error.message);
+
+      if (!parsed.ok) {
+        setError(parsed.error.message);
         return;
       }
 
-      const { data } = json;
+      const { data } = parsed;
       const noticeParts: string[] = [];
       if (skippedNonPdf > 0) {
         noticeParts.push(
@@ -209,7 +276,7 @@ export function CvsClient() {
     } catch {
       setError("Upload failed");
     } finally {
-      setUploading(false);
+      setUploadPhase(null);
     }
   }
 
@@ -297,7 +364,12 @@ export function CvsClient() {
 
       <div className="rounded-2xl border border-zinc-200/90 bg-white p-1 shadow-md shadow-zinc-900/5 dark:border-zinc-800 dark:bg-zinc-950/80 dark:shadow-none">
         <label
-          className="flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-zinc-200 bg-zinc-50/80 px-4 py-8 transition-colors hover:border-teal-400/60 hover:bg-teal-50/40 focus-within:outline-none focus-within:ring-2 focus-within:ring-teal-500/30 focus-within:ring-offset-2 focus-within:ring-offset-white dark:border-zinc-700 dark:bg-zinc-900/30 dark:hover:border-teal-600/50 dark:hover:bg-teal-950/20 dark:focus-within:ring-offset-zinc-950 lg:py-7"
+          aria-busy={uploading}
+          className={`flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-zinc-200 bg-zinc-50/80 px-4 py-8 transition-colors focus-within:outline-none focus-within:ring-2 focus-within:ring-teal-500/30 focus-within:ring-offset-2 focus-within:ring-offset-white dark:border-zinc-700 dark:bg-zinc-900/30 dark:focus-within:ring-offset-zinc-950 lg:py-7 ${
+            uploading
+              ? "cursor-wait"
+              : "cursor-pointer hover:border-teal-400/60 hover:bg-teal-50/40 dark:hover:border-teal-600/50 dark:hover:bg-teal-950/20"
+          }`}
           onDragOver={(e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -311,17 +383,71 @@ export function CvsClient() {
         >
           <PdfIcon className="mb-3 text-zinc-400 dark:text-zinc-500" />
           <span className="text-sm font-medium text-zinc-800 dark:text-zinc-200">
-            {uploading ? (
-              <span className="inline-flex items-center gap-2">
-                <Spinner className="h-4 w-4 text-teal-600 dark:text-teal-400" />
-                Uploading…
+            {uploadPhase ? (
+              <span className="inline-flex flex-col items-center gap-3">
+                <span className="inline-flex items-center gap-2">
+                  <Spinner className="h-4 w-4 shrink-0 text-teal-600 dark:text-teal-400" />
+                  {uploadPhase.phase === "sending" ? (
+                    <span>
+                      Sending{" "}
+                      {uploadPhase.fileCount === 1
+                        ? "1 PDF"
+                        : `${uploadPhase.fileCount} PDFs`}
+                      {uploadPhase.percent !== null
+                        ? ` — ${uploadPhase.percent}%`
+                        : "…"}
+                    </span>
+                  ) : (
+                    <span>
+                      Processing{" "}
+                      {uploadPhase.fileCount === 1
+                        ? "1 résumé"
+                        : `${uploadPhase.fileCount} résumés`}{" "}
+                      (extract + metadata)…
+                    </span>
+                  )}
+                </span>
+                <span
+                  className="block h-1.5 w-full max-w-xs overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-700"
+                  role="progressbar"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={
+                    uploadPhase.phase === "sending" &&
+                    uploadPhase.percent !== null
+                      ? uploadPhase.percent
+                      : undefined
+                  }
+                  aria-valuetext={
+                    uploadPhase.phase === "processing"
+                      ? `Processing ${uploadPhase.fileCount} résumés on the server`
+                      : uploadPhase.phase === "sending" &&
+                          uploadPhase.percent !== null
+                        ? `Upload ${uploadPhase.percent}% complete`
+                        : `Sending ${uploadPhase.fileCount} PDFs`
+                  }
+                >
+                  {uploadPhase.phase === "sending" &&
+                  uploadPhase.percent !== null ? (
+                    <span
+                      className="block h-full rounded-full bg-teal-600 transition-[width] duration-150 motion-reduce:transition-none dark:bg-teal-500"
+                      style={{ width: `${uploadPhase.percent}%` }}
+                    />
+                  ) : (
+                    <span className="relative block h-full w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-700">
+                      <span className="cv-upload-indeterminate-bar absolute inset-y-0 w-2/5 rounded-full bg-teal-600 dark:bg-teal-500" />
+                    </span>
+                  )}
+                </span>
               </span>
             ) : (
               "Drop PDFs here or click to select one or more"
             )}
           </span>
           <span className="mt-1.5 text-center text-xs text-zinc-500 dark:text-zinc-400">
-            Max 10 MB per file · PDF only · bulk upload supported
+            {uploading
+              ? "Keep this tab open until the upload finishes."
+              : "Max 10 MB per file · PDF only · bulk upload supported"}
           </span>
           <input
             type="file"
@@ -330,9 +456,10 @@ export function CvsClient() {
             className="sr-only"
             disabled={uploading}
             onChange={(e) => {
-              const list = e.target.files;
-              e.target.value = "";
-              void onUploadCvsFiles(list);
+              const input = e.target;
+              const picked = input.files ? Array.from(input.files) : [];
+              input.value = "";
+              void onUploadCvsFiles(picked);
             }}
           />
         </label>

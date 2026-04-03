@@ -1,7 +1,19 @@
 import { mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { MAX_UPLOAD_BYTES, LOW_TEXT_THRESHOLD_CHARS } from "@/lib/constants";
+import {
+  LOW_TEXT_THRESHOLD_CHARS,
+  MAX_UPLOAD_BYTES,
+  maxCsvJobRows,
+} from "@/lib/constants";
+import {
+  buildExtractedNarrativeFromRow,
+  inferSkillsFromRow,
+  inferTitleGuessFromRow,
+  parseJobRequirementsCsv,
+  rowOriginalDisplayName,
+  sourceRequirementIdFromRow,
+} from "@/lib/csvJobRequirements";
 import {
   cvsExtractedDir,
   cvsMetaDir,
@@ -29,7 +41,8 @@ export class StorageError extends Error {
       | "FILE_TOO_LARGE"
       | "INVALID_TYPE"
       | "NOT_FOUND"
-      | "READ_FAILED",
+      | "READ_FAILED"
+      | "CSV_TOO_MANY_ROWS",
   ) {
     super(message);
     this.name = "StorageError";
@@ -339,6 +352,18 @@ function isTextMime(mime: string, name: string) {
   return name.toLowerCase().endsWith(".txt");
 }
 
+export function isCsvFile(mime: string, name: string): boolean {
+  const m = mime.toLowerCase();
+  if (
+    m === "text/csv" ||
+    m === "application/csv" ||
+    m === "application/vnd.ms-excel"
+  ) {
+    return true;
+  }
+  return name.toLowerCase().endsWith(".csv");
+}
+
 export type PersistJobDescriptionOptions = {
   /** When true, do not call the LLM for title; use `explicitTitleGuess` or null. */
   skipTitleInference?: boolean;
@@ -458,6 +483,139 @@ export async function persistJobDescriptionFromBuffer(
 
   await writeFile(jdMetaPath(id), JSON.stringify(meta, null, 2), "utf8");
   return meta;
+}
+
+export async function persistJobDescriptionFromCsvRow(input: {
+  structuredFields: Record<string, string>;
+  extracted: string;
+  originalName: string;
+  sourceFileName: string;
+  sourceRequirementId?: string;
+  titleGuess: string | null;
+  geminiSkills: string[];
+}): Promise<JobStoredMeta> {
+  await initStorageDirs();
+  const id = randomUUID();
+  const storageFileName = `${id}.json`;
+  const payload = {
+    sourceFileName: input.sourceFileName,
+    sourceRequirementId: input.sourceRequirementId,
+    structuredFields: input.structuredFields,
+  };
+  await writeFile(
+    path.join(jobDescriptionsDir(), storageFileName),
+    JSON.stringify(payload, null, 2),
+    "utf8",
+  );
+
+  await writeFile(jdExtractedPath(id), input.extracted, "utf8");
+
+  const lowTextWarning =
+    input.extracted.length > 0 &&
+    input.extracted.length < LOW_TEXT_THRESHOLD_CHARS;
+
+  const uploadedAt = new Date().toISOString();
+  const meta: JobStoredMeta = {
+    id,
+    originalName: input.originalName,
+    uploadedAt,
+    type: "job_description",
+    storageFileName,
+    mimeType: "application/json",
+    extractedCharCount: input.extracted.length,
+    ...(lowTextWarning ? { lowTextWarning: true } : {}),
+    titleGuess: input.titleGuess,
+    sourceKind: "csv_row",
+    structuredFields: input.structuredFields,
+    ...(input.sourceRequirementId
+      ? { sourceRequirementId: input.sourceRequirementId }
+      : {}),
+    ...(input.geminiSkills.length ? { geminiSkills: input.geminiSkills } : {}),
+    searchIndex: buildJobSearchIndex(
+      input.originalName,
+      uploadedAt,
+      input.titleGuess,
+      "application/json",
+      input.extracted,
+      undefined,
+      input.geminiSkills,
+    ),
+  };
+
+  await writeFile(jdMetaPath(id), JSON.stringify(meta, null, 2), "utf8");
+  return meta;
+}
+
+export type CsvJobImportRowError = {
+  fileName: string;
+  code: string;
+  message: string;
+};
+
+/**
+ * One stored job per CSV data row. Row-level failures are collected in `errors`.
+ */
+export async function saveJobDescriptionsFromCsvFile(file: File): Promise<{
+  items: JobStoredMeta[];
+  errors: CsvJobImportRowError[];
+}> {
+  const buffer = Buffer.from(await file.arrayBuffer());
+  assertSize(buffer.length);
+  const sourceFileName = file.name || "requirements.csv";
+
+  let records: Record<string, string>[];
+  try {
+    records = parseJobRequirementsCsv(buffer);
+  } catch {
+    throw new StorageError("Could not parse CSV", "INVALID_TYPE");
+  }
+
+  if (records.length === 0) {
+    throw new StorageError("CSV has no data rows", "INVALID_TYPE");
+  }
+
+  const limit = maxCsvJobRows();
+  if (records.length > limit) {
+    throw new StorageError(
+      `CSV has ${records.length} rows; maximum is ${limit}. Set MAX_CSV_JOB_ROWS to raise the limit.`,
+      "CSV_TOO_MANY_ROWS",
+    );
+  }
+
+  const items: JobStoredMeta[] = [];
+  const errors: CsvJobImportRowError[] = [];
+
+  for (let i = 0; i < records.length; i++) {
+    const row = records[i]!;
+    const rowNum = i + 2;
+    try {
+      const extracted = buildExtractedNarrativeFromRow(row);
+      const titleGuess = inferTitleGuessFromRow(row);
+      const geminiSkills = inferSkillsFromRow(row);
+      const sourceRequirementId = sourceRequirementIdFromRow(row);
+      const originalName = rowOriginalDisplayName(sourceFileName, row);
+
+      const meta = await persistJobDescriptionFromCsvRow({
+        structuredFields: { ...row },
+        extracted,
+        originalName,
+        sourceFileName,
+        sourceRequirementId,
+        titleGuess,
+        geminiSkills,
+      });
+      items.push(meta);
+    } catch (e) {
+      errors.push({
+        fileName: `${sourceFileName} (row ${rowNum})`,
+        code: "UPLOAD_FAILED",
+        message:
+          e instanceof Error ? e.message : "Could not save job from CSV row",
+      });
+    }
+  }
+
+  return { items, errors };
 }
 
 export async function saveJobDescriptionFromFile(

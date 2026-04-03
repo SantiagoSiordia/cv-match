@@ -22,7 +22,9 @@ export function buildJobSearchIndex(
   geminiError?: string,
   geminiSkills?: string[],
 ): string {
-  const base = (originalName || "").replace(/\.(pdf|txt)$/i, "").trim();
+  const base = (originalName || "")
+    .replace(/\.(pdf|txt|json)$/i, "")
+    .trim();
   const parts = [
     base,
     originalName || "",

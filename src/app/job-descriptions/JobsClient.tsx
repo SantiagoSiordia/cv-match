@@ -100,7 +100,7 @@ export function JobsClient() {
 
       const { data } = json;
       if ("item" in data) {
-        /* single-file success: no banner */
+        /* single PDF/txt job: no banner */
       } else {
         const { items, errors } = data;
         const parts: string[] = [`Uploaded ${items.length} job description(s).`];
@@ -214,9 +214,10 @@ export function JobsClient() {
           Job descriptions
         </h1>
         <p className="mt-2 max-w-2xl text-sm text-zinc-600 dark:text-zinc-400">
-          Upload one or more PDFs or <code className="text-xs">.txt</code> files
-          (bulk supported), or paste text below. We extract text and infer a
-          short title when possible.
+          Upload PDFs, <code className="text-xs">.txt</code>, or a requirements{" "}
+          <code className="text-xs">.csv</code> (one job per row). Bulk PDF/txt
+          supported. For CSV we store every column and build text for matching.
+          We infer a short title from PDF/txt when possible.
         </p>
       </div>
 
@@ -236,21 +237,22 @@ export function JobsClient() {
         <span className="text-sm font-medium text-zinc-800 dark:text-zinc-200">
           {uploading
             ? "Uploading…"
-            : "Drop PDFs or .txt files here or click to select multiple"}
+            : "Drop files here or click to select multiple (PDF, .txt, .csv)"}
         </span>
         <span className="mt-1 text-center text-xs text-zinc-500">
-          Max 10 MB per file · PDF or plain text
+          Max 10 MB per file · CSV creates one job per data row
         </span>
         <input
           type="file"
-          accept=".pdf,.txt,application/pdf,text/plain"
+          accept=".pdf,.txt,.csv,application/pdf,text/plain,text/csv"
           multiple
           className="sr-only"
           disabled={uploading}
           onChange={(e) => {
-            const list = e.target.files;
-            e.target.value = "";
-            void onUploadJobFiles(list);
+            const input = e.target;
+            const picked = input.files ? Array.from(input.files) : [];
+            input.value = "";
+            void onUploadJobFiles(picked);
           }}
         />
       </label>

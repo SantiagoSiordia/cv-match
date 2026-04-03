@@ -1,8 +1,10 @@
 import { jsonError, jsonOk, multipartFileList } from "@/lib/http";
 import type { JobStoredMeta } from "@/lib/schemas";
 import {
+  isCsvFile,
   listJobDescriptions,
   saveJobDescriptionFromFile,
+  saveJobDescriptionsFromCsvFile,
   saveJobDescriptionFromText,
   StorageError,
 } from "@/lib/storage";
@@ -46,7 +48,9 @@ export async function POST(request: Request) {
             ? 413
             : e.code === "INVALID_TYPE"
               ? 415
-              : 400;
+              : e.code === "CSV_TOO_MANY_ROWS"
+                ? 400
+                : 400;
         return jsonError(status, e.code, e.message);
       }
       console.error(e);
@@ -69,10 +73,17 @@ export async function POST(request: Request) {
     const errors: { fileName: string; code: string; message: string }[] = [];
 
     for (const file of files) {
+      const fileName = file.name || "unnamed";
       try {
-        items.push(await saveJobDescriptionFromFile(file));
+        if (isCsvFile(file.type || "", fileName)) {
+          const { items: csvItems, errors: csvErrors } =
+            await saveJobDescriptionsFromCsvFile(file);
+          items.push(...csvItems);
+          errors.push(...csvErrors);
+        } else {
+          items.push(await saveJobDescriptionFromFile(file));
+        }
       } catch (e) {
-        const fileName = file.name || "unnamed";
         if (e instanceof StorageError) {
           errors.push({ fileName, code: e.code, message: e.message });
         } else {
@@ -86,18 +97,20 @@ export async function POST(request: Request) {
       }
     }
 
-    if (files.length === 1) {
-      if (items.length === 1) {
-        return jsonOk({ item: items[0]! }, 201);
-      }
+    const singleInput = files.length === 1;
+    const storageStatusForCode = (code: string) => {
+      if (code === "FILE_TOO_LARGE") return 413;
+      if (code === "INVALID_TYPE") return 415;
+      return 400;
+    };
+
+    if (singleInput && items.length === 1 && errors.length === 0) {
+      return jsonOk({ item: items[0]! }, 201);
+    }
+
+    if (singleInput && items.length === 0 && errors.length === 1) {
       const er = errors[0]!;
-      const status =
-        er.code === "FILE_TOO_LARGE"
-          ? 413
-          : er.code === "INVALID_TYPE"
-            ? 415
-            : 400;
-      return jsonError(status, er.code, er.message);
+      return jsonError(storageStatusForCode(er.code), er.code, er.message);
     }
 
     if (items.length === 0) {
@@ -119,7 +132,9 @@ export async function POST(request: Request) {
           ? 413
           : e.code === "INVALID_TYPE"
             ? 415
-            : 400;
+            : e.code === "CSV_TOO_MANY_ROWS"
+              ? 400
+              : 400;
       return jsonError(status, e.code, e.message);
     }
     console.error(e);

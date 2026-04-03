@@ -1,6 +1,8 @@
 import { jsonError, jsonOk } from "@/lib/http";
 import { computeAnalyticsOverview } from "@/lib/analytics";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const emb = Number(url.searchParams.get("embeddingThreshold") ?? "55");

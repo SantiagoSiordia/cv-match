@@ -4,10 +4,21 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import type { AnalyticsOverview } from "@/lib/analytics";
 import type { ApiErrorBody, BulkEvaluateStreamEvent } from "@/components/ApiTypes";
+import { EvaluateJobModal } from "@/components/EvaluateJobModal";
 import { PreviewModal } from "@/components/PreviewModal";
 
 /** Stable min width so table columns don’t jump between loading and loaded. */
-const JOBS_TABLE_MIN_WIDTH = "54rem";
+const JOBS_TABLE_MIN_WIDTH = "62rem";
+
+function initialCvIdsForJobRow(
+  row: AnalyticsOverview["jobRows"][number],
+): string[] | undefined {
+  if (row.top3Embedding.length > 0) {
+    return row.top3Embedding.map((t) => t.cvId);
+  }
+  if (row.bestEmbedding) return [row.bestEmbedding.cvId];
+  return undefined;
+}
 
 function BulkSpinner({ className = "size-4" }: { className?: string }) {
   return (
@@ -79,6 +90,7 @@ function buildJobRowsCsv(overview: AnalyticsOverview): string {
     "job_title",
     "best_embed_cv_id",
     "best_embed_score",
+    "top_match_skills",
     "best_llm_cv_id",
     "best_llm_score",
     "llm_run_id",
@@ -95,6 +107,7 @@ function buildJobRowsCsv(overview: AnalyticsOverview): string {
         escapeCsvCell(row.jobTitle),
         row.bestEmbedding?.cvId ?? "",
         row.bestEmbedding != null ? String(row.bestEmbedding.scorePercent) : "",
+        escapeCsvCell(row.topMatchSkills.join("; ")),
         row.bestLlm?.cvId ?? "",
         row.bestLlm != null ? String(row.bestLlm.overallScore) : "",
         row.bestLlm?.runId ?? "",
@@ -135,11 +148,12 @@ function JobsTableSkeleton() {
         >
           <thead className="border-b border-teal-100/90 bg-teal-50/50 text-[11px] font-semibold uppercase tracking-wide text-teal-900/60 dark:border-teal-900/30 dark:bg-teal-950/20 dark:text-teal-400/70">
             <tr>
-              <th className="w-[20%] px-4 py-2.5">Job</th>
-              <th className="w-[12%] px-4 py-2.5">Match</th>
-              <th className="w-[40%] px-4 py-2.5">Top 3</th>
-              <th className="w-[18%] px-4 py-2.5">LLM best</th>
-              <th className="w-[10%] px-4 py-2.5 text-right">Actions</th>
+              <th className="w-[16%] px-4 py-2.5">Job</th>
+              <th className="w-[10%] px-4 py-2.5">Match</th>
+              <th className="w-[20%] px-4 py-2.5">Skills</th>
+              <th className="w-[28%] px-4 py-2.5">Top 3</th>
+              <th className="w-[14%] px-4 py-2.5">LLM best</th>
+              <th className="w-[12%] px-4 py-2.5 text-right">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-teal-100/50 dark:divide-teal-900/25">
@@ -152,6 +166,13 @@ function JobsTableSkeleton() {
                   <div className="space-y-1.5">
                     <div className="h-4 w-10 animate-pulse rounded bg-zinc-200 dark:bg-zinc-700" />
                     <div className="h-1.5 w-16 animate-pulse rounded-full bg-zinc-200 dark:bg-zinc-700" />
+                  </div>
+                </td>
+                <td className="px-4 py-3">
+                  <div className="flex flex-wrap gap-1">
+                    <div className="h-5 w-14 animate-pulse rounded-md bg-zinc-200 dark:bg-zinc-700" />
+                    <div className="h-5 w-16 animate-pulse rounded-md bg-zinc-200 dark:bg-zinc-700" />
+                    <div className="h-5 w-12 animate-pulse rounded-md bg-zinc-200 dark:bg-zinc-700" />
                   </div>
                 </td>
                 <td className="px-4 py-3">
@@ -236,6 +257,12 @@ export function AnalyticsClient() {
     cvId: string;
     title: string;
   } | null>(null);
+  const [jobsTableFilter, setJobsTableFilter] = useState("");
+  const [evaluateModal, setEvaluateModal] = useState<{
+    jobId: string;
+    jobTitle: string;
+    initialCvIds?: string[];
+  } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -245,7 +272,9 @@ export function AnalyticsClient() {
         embeddingThreshold: String(embThreshold),
         llmThreshold: String(llmThreshold),
       });
-      const res = await fetch(`/api/analytics/overview?${q}`);
+      const res = await fetch(`/api/analytics/overview?${q}`, {
+        cache: "no-store",
+      });
       const json = (await res.json()) as
         | { ok: true; data: { overview: AnalyticsOverview } }
         | ApiErrorBody;
@@ -292,6 +321,26 @@ export function AnalyticsClient() {
     return max >= 0 ? max : null;
   }, [overview]);
 
+  const filteredJobRows = useMemo(() => {
+    if (!overview) return [];
+    const q = jobsTableFilter.trim().toLowerCase();
+    if (!q) return overview.jobRows;
+    return overview.jobRows.filter((row) => {
+      if (row.jobTitle.toLowerCase().includes(q)) return true;
+      const best = row.bestEmbedding?.cvName.toLowerCase();
+      if (best?.includes(q)) return true;
+      if (row.bestLlm?.cvName.toLowerCase().includes(q)) return true;
+      if (
+        row.topMatchSkills.some((s) => s.toLowerCase().includes(q))
+      ) {
+        return true;
+      }
+      return row.top3Embedding.some((t) =>
+        t.cvName.toLowerCase().includes(q),
+      );
+    });
+  }, [overview, jobsTableFilter]);
+
   const bulkProgressStats = useMemo(() => {
     if (!bulkProgress || bulkProgress.phase === "matrix") return null;
     const { total, jobs } = bulkProgress;
@@ -304,6 +353,12 @@ export function AnalyticsClient() {
     const pct = total ? Math.round((finished / total) * 100) : 0;
     return { total, finished, pct, running: jobs.some((j) => j.state === "running") };
   }, [bulkProgress]);
+
+  async function onRecalculateTop3AllJobs() {
+    setActionMsg(null);
+    await load();
+    setActionMsg("Top 3 and embedding ranks recalculated for every job.");
+  }
 
   async function onRebuildIndices() {
     setActionMsg(null);
@@ -543,6 +598,7 @@ export function AnalyticsClient() {
           type="button"
           disabled={loading}
           onClick={() => void load()}
+          title="Recomputes embedding match % and Top 3 for every job from current on-disk indices (does not re-embed)."
           className="rounded-lg border border-zinc-200 px-3 py-2 text-sm font-medium hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:hover:bg-zinc-900"
         >
           Refresh
@@ -569,7 +625,29 @@ export function AnalyticsClient() {
         <p className="text-xs font-semibold uppercase tracking-wide text-zinc-600 dark:text-zinc-400">
           Actions
         </p>
+        <p className="mt-2 max-w-2xl text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
+          Use{" "}
+          <span className="font-medium text-zinc-800 dark:text-zinc-200">
+            Recalculate Top 3 (all jobs)
+          </span>{" "}
+          or <span className="font-medium text-zinc-800 dark:text-zinc-200">Refresh</span>{" "}
+          above to rerun the job×CV matrix for every position (Top 3, best match %,
+          technical-tier ordering) from current data. That does not call the embedding
+          API. After new résumés or a model change, run{" "}
+          <span className="font-medium text-zinc-800 dark:text-zinc-200">
+            Rebuild embedding indices
+          </span>{" "}
+          first, then recalculate.
+        </p>
         <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled={loading || rebuilding || backfilling}
+            onClick={() => void onRecalculateTop3AllJobs()}
+            className="rounded-lg border border-teal-300 bg-teal-50 px-3 py-2 text-sm font-medium text-teal-950 hover:bg-teal-100 disabled:opacity-50 dark:border-teal-800 dark:bg-teal-950/40 dark:text-teal-100 dark:hover:bg-teal-900/50"
+          >
+            Recalculate Top 3 (all jobs)
+          </button>
           <button
             type="button"
             disabled={rebuilding}
@@ -697,7 +775,7 @@ export function AnalyticsClient() {
                     style={{ width: `${bulkProgressStats.pct}%` }}
                   />
                 </div>
-                <ul className="mt-3 max-h-52 space-y-1.5 overflow-y-auto overscroll-contain pr-1 text-sm">
+                <ul className="scrollbar-app mt-3 max-h-52 space-y-1.5 overflow-y-auto overscroll-contain pr-1 text-sm">
                   {bulkProgress.jobs.map((row, i) => (
                     <li
                       key={`${row.jobDescriptionId}-${i}`}
@@ -919,23 +997,46 @@ export function AnalyticsClient() {
                     Jobs and best candidates (embedding)
                   </h2>
                   <p className="mt-1 max-w-2xl text-xs leading-relaxed text-teal-900/80 dark:text-teal-200/70">
-                    Cosine similarity between each job vector and every résumé.
-                    Click a chip in Top 3 to preview the PDF. Rank 1 is the best
-                    match. “At bar” means that best score meets your embedding
-                    closable threshold (
+                    Cosine similarity between the full job text and each résumé
+                    (as vectors). #1 is the strongest textual overlap, not a
+                    hiring pick — shared agile, delivery, or enterprise wording
+                    can rank an unrelated title highly.                     For technical roles, we
+                    move clearly non-technical profiles (e.g. Scrum Master with
+                    no tech signals in metadata or the résumé’s first 12k
+                    characters) after anyone who looks technical from metadata
+                    or that text, when at least one such CV exists. For role fit, run Evaluate and use the LLM best
+                    column. Skills are CV metadata for the #1 embedding row
+                    only. Click a Top 3 chip to preview the PDF. “At bar” means
+                    that score meets your embedding threshold (
                     {overview.thresholds.embeddingPercent}%).
                   </p>
                 </div>
+                <div className="flex w-full min-w-0 max-w-md flex-col gap-2 sm:shrink-0">
+                  <label className="sr-only" htmlFor="analytics-jobs-filter">
+                    Filter jobs and candidates
+                  </label>
+                  <input
+                    id="analytics-jobs-filter"
+                    type="search"
+                    autoComplete="off"
+                    placeholder="Filter by job or candidate name…"
+                    value={jobsTableFilter}
+                    onChange={(e) => setJobsTableFilter(e.target.value)}
+                    className="w-full min-w-0 rounded-lg border border-teal-200/90 bg-white/95 px-3 py-1.5 text-xs text-teal-950 placeholder:text-teal-800/40 focus:border-teal-500/50 focus:outline-none focus:ring-2 focus:ring-teal-500/20 dark:border-teal-800/70 dark:bg-teal-950/40 dark:text-teal-50 dark:placeholder:text-teal-300/35 dark:focus:border-teal-500/40 dark:focus:ring-teal-500/15"
+                  />
+                </div>
                 <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
                   <span className="rounded-full bg-teal-600/15 px-2.5 py-1 text-xs font-semibold tabular-nums text-teal-900 dark:bg-teal-400/15 dark:text-teal-100">
-                    {overview.jobRows.length} job
-                    {overview.jobRows.length === 1 ? "" : "s"}
+                    {jobsTableFilter.trim()
+                      ? `${filteredJobRows.length} / ${overview.jobRows.length}`
+                      : `${overview.jobRows.length} job${overview.jobRows.length === 1 ? "" : "s"}`}
                   </span>
                   {csvBlobUrl ? (
                     <a
                       href={csvBlobUrl}
                       download={`analytics-jobs-${overview.generatedAt.slice(0, 10)}.csv`}
                       className="rounded-lg border border-teal-300/80 bg-white/90 px-2.5 py-1.5 text-xs font-medium text-teal-900 shadow-sm hover:bg-teal-50 dark:border-teal-800 dark:bg-teal-950/50 dark:text-teal-100 dark:hover:bg-teal-900/40"
+                      title="Full list, not filtered"
                     >
                       Export CSV
                     </a>
@@ -943,7 +1044,7 @@ export function AnalyticsClient() {
                 </div>
               </div>
 
-              <div className="relative z-0 overflow-x-auto">
+              <div className="scrollbar-app relative z-0 max-h-[min(70vh,36rem)] overflow-auto overscroll-contain pr-0.5">
                 {overview.jobRows.length === 0 ? (
                   <div className="flex flex-col items-center justify-center border-t border-dashed border-teal-200/60 px-4 py-14 text-center dark:border-teal-900/40">
                     <p className="text-sm font-medium text-teal-950 dark:text-teal-100">
@@ -958,19 +1059,46 @@ export function AnalyticsClient() {
                     className="w-full table-fixed text-left text-sm"
                     style={{ minWidth: JOBS_TABLE_MIN_WIDTH }}
                   >
-                    <thead className="border-b border-teal-100/90 bg-teal-50/50 text-[11px] font-semibold uppercase tracking-wide text-teal-900/70 dark:border-teal-900/30 dark:bg-teal-950/20 dark:text-teal-300/80">
+                    <thead className="sticky top-0 z-[1] border-b border-teal-100/90 bg-teal-50/95 text-[11px] font-semibold uppercase tracking-wide text-teal-900/70 shadow-[0_1px_0_0_rgb(204_251_241_/_0.5)] backdrop-blur-sm dark:border-teal-900/30 dark:bg-teal-950/95 dark:text-teal-300/80 dark:shadow-[0_1px_0_0_rgb(19_78_74_/_0.4)]">
                       <tr>
-                        <th className="w-[20%] px-4 py-2.5">Job</th>
-                        <th className="w-[12%] px-4 py-2.5">Match</th>
-                        <th className="w-[40%] px-4 py-2.5">Top 3</th>
-                        <th className="w-[18%] px-4 py-2.5">LLM best</th>
-                        <th className="w-[10%] px-4 py-2.5 text-right">
+                        <th className="w-[16%] px-4 py-2.5">Job</th>
+                        <th
+                          className="w-[10%] px-4 py-2.5"
+                          title="Best embedding similarity vs this job’s text (not role-fit score)"
+                        >
+                          Match
+                        </th>
+                        <th
+                          className="w-[20%] px-4 py-2.5"
+                          title="Hard skills from metadata for the #1 embedding match"
+                        >
+                          Skills
+                        </th>
+                        <th
+                          className="w-[28%] px-4 py-2.5"
+                          title="Top 3 résumés by embedding similarity to this job text"
+                        >
+                          Top 3
+                        </th>
+                        <th className="w-[14%] px-4 py-2.5">LLM best</th>
+                        <th className="w-[12%] px-4 py-2.5 text-right">
                           Actions
                         </th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-teal-100/60 dark:divide-teal-900/25">
-                      {overview.jobRows.map((row) => {
+                      {filteredJobRows.length === 0 ? (
+                        <tr>
+                          <td
+                            colSpan={6}
+                            className="px-4 py-10 text-center text-sm text-teal-900/70 dark:text-teal-200/65"
+                          >
+                            No jobs or candidates match “
+                            {jobsTableFilter.trim()}”.
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredJobRows.map((row) => {
                         const emb = row.bestEmbedding;
                         const atBar =
                           emb != null &&
@@ -1012,6 +1140,27 @@ export function AnalyticsClient() {
                                       }}
                                     />
                                   </div>
+                                </div>
+                              ) : (
+                                <span className="text-sm text-zinc-400 dark:text-zinc-500">
+                                  —
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-4 py-3 align-top">
+                              {row.topMatchSkills.length ? (
+                                <div
+                                  className="scrollbar-app flex max-h-[5rem] flex-wrap gap-1 overflow-y-auto pr-0.5"
+                                  title={row.topMatchSkills.join(", ")}
+                                >
+                                  {row.topMatchSkills.map((skill, si) => (
+                                    <span
+                                      key={`${skill}-${si}`}
+                                      className="max-w-full truncate rounded-md border border-zinc-200/90 bg-zinc-50 px-1.5 py-0.5 text-[10px] font-medium leading-tight text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900/60 dark:text-zinc-200"
+                                    >
+                                      {skill}
+                                    </span>
+                                  ))}
                                 </div>
                               ) : (
                                 <span className="text-sm text-zinc-400 dark:text-zinc-500">
@@ -1069,12 +1218,19 @@ export function AnalyticsClient() {
                             </td>
                             <td className="px-4 py-3 align-top text-right">
                               <div className="flex flex-col items-end gap-1.5 sm:flex-row sm:flex-wrap sm:justify-end">
-                                <Link
-                                  href={`/evaluate?jobDescriptionId=${row.jobDescriptionId}`}
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setEvaluateModal({
+                                      jobId: row.jobDescriptionId,
+                                      jobTitle: row.jobTitle,
+                                      initialCvIds: initialCvIdsForJobRow(row),
+                                    })
+                                  }
                                   className="inline-flex items-center justify-center rounded-md bg-zinc-900 px-2.5 py-1 text-xs font-semibold text-white shadow-sm hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
                                 >
                                   Evaluate
-                                </Link>
+                                </button>
                                 {row.bestLlm ? (
                                   <Link
                                     href={`/dashboard/compare/${row.bestLlm.runId}`}
@@ -1087,7 +1243,8 @@ export function AnalyticsClient() {
                             </td>
                           </tr>
                         );
-                      })}
+                      })
+                      )}
                     </tbody>
                   </table>
                 )}
@@ -1100,10 +1257,24 @@ export function AnalyticsClient() {
               jobs={overview.closableByEmbedding.jobs}
               thresholdPercent={overview.thresholds.embeddingPercent}
               onOpenPdf={openCvPdf}
+              onOpenEvaluate={(j) =>
+                setEvaluateModal({
+                  jobId: j.jobDescriptionId,
+                  jobTitle: j.jobTitle,
+                  initialCvIds: [j.bestCvId],
+                })
+              }
             />
             <ClosableLlmPanel
               jobs={overview.closableByLlm.jobs}
               thresholdScore={overview.thresholds.llmOverall}
+              onOpenEvaluate={(j) =>
+                setEvaluateModal({
+                  jobId: j.jobDescriptionId,
+                  jobTitle: j.jobTitle,
+                  initialCvIds: [j.bestCvId],
+                })
+              }
             />
           </section>
 
@@ -1177,6 +1348,15 @@ export function AnalyticsClient() {
           />
         ) : null}
       </PreviewModal>
+
+      <EvaluateJobModal
+        open={evaluateModal !== null}
+        onClose={() => setEvaluateModal(null)}
+        jobDescriptionId={evaluateModal?.jobId ?? ""}
+        jobTitle={evaluateModal?.jobTitle ?? ""}
+        initialSelectedCvIds={evaluateModal?.initialCvIds}
+        onRunComplete={() => void load()}
+      />
     </div>
   );
 }
@@ -1205,10 +1385,12 @@ function ClosableEmbeddingPanel({
   jobs,
   thresholdPercent,
   onOpenPdf,
+  onOpenEvaluate,
 }: {
   jobs: ClosableEmbJob[];
   thresholdPercent: number;
   onOpenPdf: (cvId: string, name: string) => void;
+  onOpenEvaluate: (job: ClosableEmbJob) => void;
 }) {
   const shown = jobs.slice(0, CLOSABLE_LIST_MAX);
   const more = jobs.length - shown.length;
@@ -1267,12 +1449,13 @@ function ClosableEmbeddingPanel({
                   <span className="inline-flex items-center rounded-lg border border-emerald-200/80 bg-white/80 px-2 py-1 text-xs font-medium text-emerald-900 dark:border-emerald-800/60 dark:bg-zinc-900/60 dark:text-emerald-200/90">
                     {j.candidatesAtOrAboveThreshold} at bar
                   </span>
-                  <Link
-                    href={`/evaluate?jobDescriptionId=${j.jobDescriptionId}`}
+                  <button
+                    type="button"
+                    onClick={() => onOpenEvaluate(j)}
                     className="inline-flex rounded-lg bg-emerald-800 px-2.5 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-900 dark:bg-emerald-600 dark:hover:bg-emerald-500"
                   >
                     Evaluate
-                  </Link>
+                  </button>
                 </div>
               </li>
             ))}
@@ -1291,9 +1474,11 @@ function ClosableEmbeddingPanel({
 function ClosableLlmPanel({
   jobs,
   thresholdScore,
+  onOpenEvaluate,
 }: {
   jobs: ClosableLlmJob[];
   thresholdScore: number;
+  onOpenEvaluate: (job: ClosableLlmJob) => void;
 }) {
   const shown = jobs.slice(0, CLOSABLE_LIST_MAX);
   const more = jobs.length - shown.length;
@@ -1354,12 +1539,13 @@ function ClosableLlmPanel({
                   >
                     Compare
                   </Link>
-                  <Link
-                    href={`/evaluate?jobDescriptionId=${j.jobDescriptionId}`}
+                  <button
+                    type="button"
+                    onClick={() => onOpenEvaluate(j)}
                     className="inline-flex rounded-lg border border-violet-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-violet-900 shadow-sm hover:bg-violet-50 dark:border-violet-700 dark:bg-zinc-900 dark:text-violet-100 dark:hover:bg-violet-950/50"
                   >
                     Re-run
-                  </Link>
+                  </button>
                 </div>
               </li>
             ))}

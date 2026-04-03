@@ -1,6 +1,14 @@
 /** Max upload size per PRD (bytes). */
 export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 
+/** Max data rows accepted per CSV job import (`MAX_CSV_JOB_ROWS` overrides). */
+export function maxCsvJobRows(): number {
+  const raw = process.env.MAX_CSV_JOB_ROWS?.trim();
+  if (!raw) return 2000;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : 2000;
+}
+
 /** Warn when extracted text is shorter than this (likely scan or empty PDF). */
 export const LOW_TEXT_THRESHOLD_CHARS = 120;
 
