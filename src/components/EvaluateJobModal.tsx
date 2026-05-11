@@ -199,7 +199,7 @@ export function EvaluateJobModal({
     }
     const progressItems: ProgressRow[] = selectedIds.map((id) => {
       const c = cvs.find((x) => x.id === id);
-      const displayName = (c?.originalName ?? c?.gemini?.name ?? id).trim();
+      const displayName = (c?.originalName ?? c?.extracted?.name ?? id).trim();
       return { cvId: id, displayName: displayName || id, state: "pending" };
     });
     setEvaluateProgress({ items: progressItems });

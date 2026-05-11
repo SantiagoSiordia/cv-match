@@ -1,7 +1,7 @@
 import { AnalyticsClient } from "./AnalyticsClient";
 
 export const metadata = {
-  title: "Analytics",
+  title: "Pipeline overview",
 };
 
 export default function AnalyticsPage() {

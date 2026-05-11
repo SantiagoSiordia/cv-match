@@ -26,7 +26,7 @@ describe("cvSearchFilter", () => {
 
   it("falls back to metadata when searchIndex is missing", () => {
     const cv = mockCv({
-      gemini: {
+      extracted: {
         name: "Jane Doe",
         location: "",
         currentPosition: "Staff Engineer",

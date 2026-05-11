@@ -19,7 +19,7 @@ export const metadata: Metadata = {
     template: "%s · CV Match",
   },
   description:
-    "Evaluate candidate CVs against job descriptions with AI-powered scoring (Bedrock or Gemini).",
+    "Evaluate candidate CVs against job descriptions with AI-powered scoring (Amazon Bedrock).",
 };
 
 export default function RootLayout({

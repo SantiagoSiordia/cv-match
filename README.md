@@ -1,6 +1,6 @@
 # CV Match
 
-Web app to **upload CVs (PDF)** and **job descriptions** (PDF or text), then **score candidates against a role** using **AI on the server** — **[Amazon Bedrock](https://aws.amazon.com/bedrock/)** when configured (Claude + Titan embeddings), or **[Google Gemini](https://ai.google.dev/)** as fallback or standalone (Flash-Lite + text embeddings). Results are stored on disk as JSON so you can compare runs over time.
+Web app to **upload CVs (PDF)** and **job descriptions** (PDF or text), then **score candidates against a role** using **[Amazon Bedrock](https://aws.amazon.com/bedrock/)** on the server — **Claude** for structured scoring and metadata, **Titan Embeddings** for semantic similarity. Results are stored on disk as JSON so you can compare runs over time.
 
 Product goals and features are summarized in [PRD.md](./PRD.md).
 
@@ -12,7 +12,7 @@ Product goals and features are summarized in [PRD.md](./PRD.md).
 |-------------|--------|
 | **Node.js** | **20.x or newer** (LTS recommended). [nodejs.org](https://nodejs.org/) |
 | **npm** | Ships with Node; this repo uses `package-lock.json`. |
-| **AWS credentials** | Optional if you use **Gemini** only: configure the [default credential chain](https://docs.aws.amazon.com/sdk-for-javascript/v3/developer-guide/setting-credentials-node.html) when using **Amazon Bedrock** (preferred when configured). The app calls AI APIs only from the server. |
+| **AWS credentials** | Required for AI features: configure the [default credential chain](https://docs.aws.amazon.com/sdk-for-javascript/v3/developer-guide/setting-credentials-node.html) (including **`AWS_PROFILE`** for a named CLI profile). The app calls Bedrock only from the server. |
 
 Optional:
 
@@ -40,15 +40,17 @@ Create a `.env` file in the project root (same folder as `package.json`):
 cp .env.example .env
 ```
 
-Configure **at least one** AI backend (see [`.env.example`](.env.example)):
+Configure **Amazon Bedrock** (see [`.env.example`](.env.example)):
 
-- **Amazon Bedrock (default when available):** set `AWS_REGION` and valid AWS credentials. Optional: `BEDROCK_TEXT_MODEL_ID`, `BEDROCK_EMBEDDING_MODEL_ID` (defaults in [`src/lib/constants.ts`](src/lib/constants.ts)).
-- **Google Gemini (fallback or standalone):** set `GEMINI_API_KEY`. With **`AI_PROVIDER=auto`** (the default), the app tries Bedrock first and uses Gemini when Bedrock is not configured or returns credential/access errors. Set **`AI_PROVIDER=gemini`** to use only Gemini (e.g. local dev without AWS keys). Cheapest defaults are **`gemini-2.5-flash-lite`** for text and **`gemini-embedding-001`** for embeddings (override with `GEMINI_TEXT_MODEL` / `GEMINI_EMBEDDING_MODEL`). Transient **503 / rate limits** are retried with backoff (**`GEMINI_MAX_RETRIES`**, default 5). If Flash-Lite is often overloaded, try **`GEMINI_TEXT_MODEL=gemini-2.5-flash`** (slightly pricier, often more capacity).
+- Set **`AWS_REGION`** (and optionally **`AWS_PROFILE`** so the app uses the same credentials as `aws sts get-caller-identity --profile …`). If you omit **`AWS_REGION`**, the app reads **`region`** from **`~/.aws/config`** for that profile (same idea as the CLI).
+- Optional: **`BEDROCK_TEXT_MODEL_ID`**, **`BEDROCK_EMBEDDING_MODEL_ID`** (defaults in [`src/lib/constants.ts`](src/lib/constants.ts)).
 
 ```env
 AWS_REGION=us-east-1
-# GEMINI_API_KEY=your-key   # enables Gemini fallback or AI_PROVIDER=gemini
+# AWS_PROFILE=my-profile
 ```
+
+If you previously stored CV/job metadata with legacy field names (`gemini`, `geminiSkills`, …), run **`npm run migrate:meta-keys`** once to normalize on-disk JSON. Embedding caches built with a non-Bedrock backend should be rebuilt from the Analytics UI (or delete `embeddings/`) so Titan vectors are used consistently.
 
 For **Docker / ECS**, set **`CV_MATCH_DATA_ROOT`** to the mounted volume path (e.g. `/data`) so uploads and evaluations persist.
 
@@ -77,7 +79,7 @@ Add job descriptions in the app under **Jobs** (`/job-descriptions`); upload CVs
 
 ## Deploy locally
 
-Run the app on your machine. Complete [Setup](#setup) first (including `.env` with Bedrock **or** Gemini as in [Environment variables](#2-environment-variables)). If you use Bedrock, enable the models under **Amazon Bedrock → Model access** in the AWS console and configure [AWS credentials](https://docs.aws.amazon.com/sdk-for-javascript/v3/developer-guide/setting-credentials-node.html).
+Run the app on your machine. Complete [Setup](#setup) first (including `.env` with **`AWS_REGION`** and credentials as in [Environment variables](#2-environment-variables)). Enable your models under **Amazon Bedrock → Model access** in the AWS console.
 
 ### Development server (hot reload)
 
@@ -219,8 +221,7 @@ npm run ingest:cv-dataset
 
 - Default: **skips** AI metadata (fast, no Bedrock usage per CV).  
 - To run Bedrock metadata on every file (slow, many API calls):  
-  `INGEST_CV_AI=1 npm run ingest:cv-dataset`  
-  (Legacy: `INGEST_CV_GEMINI=1` is still accepted.)
+  `INGEST_CV_AI=1 npm run ingest:cv-dataset`
 
 Tuning:
 
@@ -237,6 +238,12 @@ If you ever had CVs in a **single** `cvs/` folder and move to the split layout (
 
 ```bash
 npm run migrate:cvs-layout
+```
+
+**Normalize legacy metadata keys** (`gemini*` → `extracted*`) after upgrading:
+
+```bash
+npm run migrate:meta-keys
 ```
 
 ---

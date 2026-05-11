@@ -73,7 +73,7 @@ Shared steps:
 1. Load job metadata and **job text** once. Missing job or text throws `EvaluateError`.
 2. **Prepare** all CV rows in parallel (`getCvMeta`, `readCvExtractedText` per id).
 3. Either:
-   - **Batch mode** (`useBatchedCompatibility`): one **`evaluateCompatibilityBatchWithProvider`** call (Bedrock or Gemini; see `src/lib/aiProvider.ts`, `bedrock.ts`, `gemini.ts`), optionally wrapped in the **global bulk semaphore** and **`withLlmThrottleRetries`**.
+   - **Batch mode** (`useBatchedCompatibility`): one **`evaluateCompatibilityBatchWithProvider`** call (Bedrock via `src/lib/aiProvider.ts` → `bedrock.ts`), optionally wrapped in the **global bulk semaphore** and **`withLlmThrottleRetries`**.
    - **Parallel per-CV mode**: up to **`EVALUATE_CV_CONCURRENCY`** (default 3, max 20) concurrent **`evaluateCompatibilityWithProvider`** calls, each wrapped with throttle retries and the global semaphore when enabled.
 4. **`saveEvaluationRun`** persists one run with results in **input `cvIds` order**.
 
@@ -86,7 +86,6 @@ Interactive evaluate (`POST /api/evaluate`) does **not** set bulk options, so it
 ### Retries and timing
 
 - **`withLlmThrottleRetries`** (`src/lib/llmThrottleRetry.ts`): exponential backoff on messages suggesting throttling / 429 / overload (especially for Bedrock). **`LLM_THROTTLE_MAX_RETRIES`** (default 6).
-- Gemini JSON calls still use their existing retry path inside `generateJsonText`.
 - **`EVALUATE_LOG_TIMING=1`**: JSON lines from `evaluate` (`evaluate_cv_llm`, `evaluate_batch_llm`, `evaluate_job_done`) and from bulk (`bulk_eval` / `job_eval_wall_ms`).
 
 ## Cost and throughput (mental model)

@@ -2,9 +2,9 @@ import { z } from "zod";
 
 /**
  * Raw LLM / legacy disk shapes (`title` + `skills` are older keys). Parsed output is always
- * {@link CvGeminiMeta} with empty strings / empty array when unknown.
+ * {@link CvExtractedMeta} with empty strings / empty array when unknown.
  */
-const cvGeminiMetaInputSchema = z.object({
+const cvExtractedMetaInputSchema = z.object({
   name: z.union([z.string(), z.null()]).optional(),
   location: z.union([z.string(), z.null()]).optional(),
   currentPosition: z.union([z.string(), z.null()]).optional(),
@@ -16,26 +16,28 @@ const cvGeminiMetaInputSchema = z.object({
   experienceSummary: z.union([z.string(), z.null()]).optional(),
 });
 
-export const cvGeminiMetaSchema = cvGeminiMetaInputSchema.transform((r) => {
-  const rawList = r.hardSkills ?? r.skills;
-  const list = Array.isArray(rawList)
-    ? rawList.flatMap((s) =>
-        typeof s === "string" && s.trim() ? [s.trim()] : [],
-      )
-    : [];
-  const pos = r.currentPosition ?? r.title;
-  return {
-    name: r.name == null ? "" : String(r.name).trim(),
-    location: r.location == null ? "" : String(r.location).trim(),
-    currentPosition: pos == null ? "" : String(pos).trim(),
-    hardSkills: list.slice(0, 40),
-    experienceSummary:
-      r.experienceSummary == null ? "" : String(r.experienceSummary).trim(),
-  };
-});
+export const cvExtractedMetaSchema = cvExtractedMetaInputSchema.transform(
+  (r) => {
+    const rawList = r.hardSkills ?? r.skills;
+    const list = Array.isArray(rawList)
+      ? rawList.flatMap((s) =>
+          typeof s === "string" && s.trim() ? [s.trim()] : [],
+        )
+      : [];
+    const pos = r.currentPosition ?? r.title;
+    return {
+      name: r.name == null ? "" : String(r.name).trim(),
+      location: r.location == null ? "" : String(r.location).trim(),
+      currentPosition: pos == null ? "" : String(pos).trim(),
+      hardSkills: list.slice(0, 40),
+      experienceSummary:
+        r.experienceSummary == null ? "" : String(r.experienceSummary).trim(),
+    };
+  },
+);
 
 /** Normalized résumé metadata: every field is always present; use "" / [] when not found. */
-export type CvGeminiMeta = z.infer<typeof cvGeminiMetaSchema>;
+export type CvExtractedMeta = z.infer<typeof cvExtractedMetaSchema>;
 
 export const compatibilityResultSchema = z.object({
   overallScore: z.number().min(0).max(100),
@@ -82,8 +84,8 @@ export const cvStoredMetaSchema = z.object({
   storageFileName: z.string(),
   extractedCharCount: z.number(),
   lowTextWarning: z.boolean().optional(),
-  gemini: cvGeminiMetaSchema.nullable().optional(),
-  geminiError: z.string().optional(),
+  extracted: cvExtractedMetaSchema.nullable().optional(),
+  extractedError: z.string().optional(),
   /** Normalized concat of name, title, skills, dates, filename, + résumé text slice — for search. */
   searchIndex: z.string().optional(),
 });
@@ -101,9 +103,9 @@ export const jobStoredMetaSchema = z.object({
   lowTextWarning: z.boolean().optional(),
   titleGuess: z.string().nullable().optional(),
   /** Required/preferred skills inferred once from the JD (LLM). */
-  geminiSkills: z.array(z.string()).optional(),
-  geminiSkillsError: z.string().optional(),
-  geminiError: z.string().optional(),
+  extractedSkills: z.array(z.string()).optional(),
+  extractedSkillsError: z.string().optional(),
+  extractedError: z.string().optional(),
   /** Normalized concat for client search (file, title, body prefix, etc.). */
   searchIndex: z.string().optional(),
   /** Provenance: pasted text, uploaded file, or one row from a CSV import. */
@@ -139,3 +141,59 @@ export const evaluationRunSchema = z.object({
 });
 
 export type EvaluationRun = z.infer<typeof evaluationRunSchema>;
+
+function coerceExtractedOnCvMeta(meta: CvStoredMeta): CvStoredMeta {
+  if (!meta.extracted) return meta;
+  const r = cvExtractedMetaSchema.safeParse(meta.extracted);
+  if (!r.success) return meta;
+  return { ...meta, extracted: r.data };
+}
+
+/**
+ * Parse CV meta JSON from disk: accepts current keys (`extracted`, `extractedError`)
+ * or legacy disk keys (`gemini`, `geminiError`).
+ */
+export function parseCvStoredMetaFromDisk(raw: unknown): CvStoredMeta | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  const legacyExtractedBlob = r.gemini;
+  const legacyErr = r.geminiError;
+  const merged: Record<string, unknown> = { ...r };
+  delete merged.gemini;
+  delete merged.geminiError;
+  if (merged.extracted === undefined && legacyExtractedBlob !== undefined) {
+    merged.extracted = legacyExtractedBlob;
+  }
+  if (merged.extractedError === undefined && legacyErr !== undefined) {
+    merged.extractedError = legacyErr;
+  }
+  const parsed = cvStoredMetaSchema.safeParse(merged);
+  if (!parsed.success) return null;
+  return coerceExtractedOnCvMeta(parsed.data);
+}
+
+/**
+ * Parse job meta JSON from disk: accepts current keys or legacy job skill/error keys.
+ */
+export function parseJobStoredMetaFromDisk(raw: unknown): JobStoredMeta | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  const merged: Record<string, unknown> = { ...r };
+  delete merged.geminiSkills;
+  delete merged.geminiSkillsError;
+  delete merged.geminiError;
+  if (merged.extractedSkills === undefined && r.geminiSkills !== undefined) {
+    merged.extractedSkills = r.geminiSkills;
+  }
+  if (
+    merged.extractedSkillsError === undefined &&
+    r.geminiSkillsError !== undefined
+  ) {
+    merged.extractedSkillsError = r.geminiSkillsError;
+  }
+  if (merged.extractedError === undefined && r.geminiError !== undefined) {
+    merged.extractedError = r.geminiError;
+  }
+  const parsed = jobStoredMetaSchema.safeParse(merged);
+  return parsed.success ? parsed.data : null;
+}

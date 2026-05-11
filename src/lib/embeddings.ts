@@ -9,16 +9,7 @@ import {
   BedrockConfigError,
   getBedrockRuntimeClient,
 } from "@/lib/bedrock";
-import {
-  getAiProviderMode,
-  generateTopMatchJustificationsWithProvider,
-  isBedrockFailureEligibleForFallback,
-} from "@/lib/aiProvider";
-import {
-  embedTextWithGemini,
-  getGeminiEmbeddingModelId,
-  hasGeminiApiKey,
-} from "@/lib/gemini";
+import { generateTopMatchJustificationsWithProvider } from "@/lib/aiProvider";
 import { cvEmbeddingIndexPath, embeddingsDir, jobEmbeddingIndexPath } from "@/lib/paths";
 import {
   getCvMeta,
@@ -28,6 +19,7 @@ import {
   readCvExtractedText,
   readJobExtractedText,
 } from "@/lib/storage";
+import { withLlmThrottleRetries } from "@/lib/llmThrottleRetry";
 import { applyTechnicalJobMatchOrdering } from "@/lib/technicalRoleRanking";
 
 export class EmbeddingApiError extends Error {
@@ -35,13 +27,6 @@ export class EmbeddingApiError extends Error {
     super(message);
     this.name = "EmbeddingApiError";
   }
-}
-
-let lockedEmbedBackend: "bedrock" | "gemini" | null = null;
-
-/** @internal */
-export function resetEmbeddingBackendLockForTests() {
-  lockedEmbedBackend = null;
 }
 
 function embeddingModelId(): string {
@@ -53,10 +38,6 @@ function embeddingModelId(): string {
 
 function bedrockIndexKey(dim: number): string {
   return `b:${encodeURIComponent(embeddingModelId())}:${dim}`;
-}
-
-function geminiIndexKey(dim: number): string {
-  return `g:${encodeURIComponent(getGeminiEmbeddingModelId())}:${dim}`;
 }
 
 /** Migrate legacy index `model` (raw Bedrock id) to keyed form. */
@@ -134,17 +115,12 @@ type CvIndexFile = {
   updatedAt?: string;
 };
 
-/** Concurrent embedding API calls per wave. */
-const EMBED_CONCURRENCY = 12;
-
-function embeddingFallbackEligible(e: unknown): boolean {
-  if (e instanceof BedrockConfigError) return true;
-  if (e instanceof EmbeddingApiError) {
-    return /credentials|Credential|AccessDenied|Unauthorized|InvalidClientTokenId|ExpiredToken|security token|Could not load credentials|EC2MetadataError|not authorized|Access Denied|Bedrock invocation failed|Embedding failed/i.test(
-      e.message,
-    );
-  }
-  return isBedrockFailureEligibleForFallback(e);
+/** Concurrent Bedrock embedding calls per wave (lower = fewer 429s). Override with EMBED_CONCURRENCY. */
+function embedConcurrency(): number {
+  const raw = process.env.EMBED_CONCURRENCY?.trim();
+  const n = raw ? parseInt(raw, 10) : 3;
+  if (!Number.isFinite(n) || n < 1) return 3;
+  return Math.min(16, n);
 }
 
 async function invokeTitanEmbedding(inputText: string): Promise<number[]> {
@@ -166,13 +142,15 @@ async function invokeTitanEmbedding(inputText: string): Promise<number[]> {
   });
 
   try {
-    const out = await client.send(
-      new InvokeModelCommand({
-        modelId,
-        contentType: "application/json",
-        accept: "application/json",
-        body: new TextEncoder().encode(body),
-      }),
+    const out = await withLlmThrottleRetries(() =>
+      client.send(
+        new InvokeModelCommand({
+          modelId,
+          contentType: "application/json",
+          accept: "application/json",
+          body: new TextEncoder().encode(body),
+        }),
+      ),
     );
     const raw = new TextDecoder().decode(out.body as Uint8Array);
     const json = JSON.parse(raw) as { embedding?: number[] };
@@ -190,59 +168,13 @@ async function invokeTitanEmbedding(inputText: string): Promise<number[]> {
   }
 }
 
-async function invokeEmbeddingVector(
-  inputText: string,
-  geminiTaskType?: "RETRIEVAL_QUERY" | "RETRIEVAL_DOCUMENT",
-): Promise<number[]> {
-  async function viaBedrock(): Promise<number[]> {
-    const v = await invokeTitanEmbedding(inputText);
-    lockedEmbedBackend = "bedrock";
-    return v;
-  }
-
-  async function viaGemini(): Promise<number[]> {
-    const v = await embedTextWithGemini(inputText, {
-      taskType: geminiTaskType,
-    });
-    lockedEmbedBackend = "gemini";
-    return v;
-  }
-
-  if (lockedEmbedBackend === "bedrock") return viaBedrock();
-  if (lockedEmbedBackend === "gemini") return viaGemini();
-
-  const mode = getAiProviderMode();
-  if (mode === "gemini") return viaGemini();
-  if (mode === "bedrock") return viaBedrock();
-
-  const region =
-    process.env.AWS_REGION?.trim() || process.env.AWS_DEFAULT_REGION?.trim();
-  if (!region) {
-    if (!hasGeminiApiKey()) {
-      throw new EmbeddingApiError(
-        "Set AWS_REGION for Bedrock embeddings or GEMINI_API_KEY for Gemini embeddings.",
-      );
-    }
-    return viaGemini();
-  }
-
-  try {
-    return await viaBedrock();
-  } catch (e) {
-    if (!embeddingFallbackEligible(e) || !hasGeminiApiKey()) {
-      if (e instanceof EmbeddingApiError || e instanceof BedrockConfigError) {
-        throw e;
-      }
-      throw new EmbeddingApiError(e instanceof Error ? e.message : String(e));
-    }
-    return viaGemini();
-  }
+async function invokeEmbeddingVector(inputText: string): Promise<number[]> {
+  return invokeTitanEmbedding(inputText);
 }
 
 function indexKeyForVector(values: number[]): string {
   const dim = values.length;
-  if (dim === 1024) return bedrockIndexKey(dim);
-  return geminiIndexKey(dim);
+  return bedrockIndexKey(dim);
 }
 
 async function embedContentSingle(
@@ -254,7 +186,7 @@ async function embedContentSingle(
     taskType === "RETRIEVAL_DOCUMENT"
       ? documentEmbeddingInput(text, title)
       : truncateForEmbedding(text);
-  return invokeEmbeddingVector(input, taskType);
+  return invokeEmbeddingVector(input);
 }
 
 async function batchEmbedContents(
@@ -265,8 +197,9 @@ async function batchEmbedContents(
   }>,
 ): Promise<number[][]> {
   const results: number[][] = new Array(requests.length);
-  for (let i = 0; i < requests.length; i += EMBED_CONCURRENCY) {
-    const slice = requests.slice(i, i + EMBED_CONCURRENCY);
+  const wave = embedConcurrency();
+  for (let i = 0; i < requests.length; i += wave) {
+    const slice = requests.slice(i, i + wave);
     const vectors = await Promise.all(
       slice.map((r) =>
         embedContentSingle(r.text, r.taskType, r.title),
@@ -361,7 +294,6 @@ export async function ensureJobEmbeddingIndex(): Promise<JobIndexFile> {
     );
     const key = indexKeyForVector(docVectors[0]!);
     if (index.model !== key) {
-      lockedEmbedBackend = null;
       index = { model: key, entries: {} };
       await saveJobIndex(index);
       return ensureJobEmbeddingIndex();
@@ -393,7 +325,6 @@ export async function ensureJobEmbeddingIndex(): Promise<JobIndexFile> {
     );
     const key = indexKeyForVector(queryVectors[0]!);
     if (index.model !== key) {
-      lockedEmbedBackend = null;
       index = { model: key, entries: {} };
       await saveJobIndex(index);
       return ensureJobEmbeddingIndex();
@@ -495,7 +426,7 @@ export async function ensureCvEmbeddingIndex(): Promise<CvIndexFile> {
       continue;
     }
     const title =
-      cv.gemini?.currentPosition?.trim() ||
+      cv.extracted?.currentPosition?.trim() ||
       cv.originalName.replace(/\.[^.]+$/, "") ||
       "CV";
     toEmbed.push({ id: cv.id, text, title, fingerprint: fp });
@@ -513,7 +444,6 @@ export async function ensureCvEmbeddingIndex(): Promise<CvIndexFile> {
     );
     const key = indexKeyForVector(vectors[0]!);
     if (index.model !== key) {
-      lockedEmbedBackend = null;
       index = { model: key, entries: {} };
       await saveCvIndex(index);
       return ensureCvEmbeddingIndex();

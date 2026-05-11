@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   compatibilityBatchResponseSchema,
-  cvGeminiMetaSchema,
+  cvExtractedMetaSchema,
 } from "@/lib/schemas";
 
-describe("cvGeminiMetaSchema", () => {
+describe("cvExtractedMetaSchema", () => {
   it("normalizes new LLM shape with empty defaults", () => {
-    const out = cvGeminiMetaSchema.parse({
+    const out = cvExtractedMetaSchema.parse({
       name: "",
       location: "",
       currentPosition: "",
@@ -23,7 +23,7 @@ describe("cvGeminiMetaSchema", () => {
   });
 
   it("maps legacy title and skills to currentPosition and hardSkills", () => {
-    const out = cvGeminiMetaSchema.parse({
+    const out = cvExtractedMetaSchema.parse({
       name: "Jane Doe",
       title: "Engineer",
       skills: ["Python", "AWS"],

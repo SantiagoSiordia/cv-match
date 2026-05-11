@@ -19,8 +19,8 @@ export function buildJobSearchIndex(
   titleGuess: string | null | undefined,
   mimeType: string,
   extractedText: string,
-  geminiError?: string,
-  geminiSkills?: string[],
+  extractedError?: string,
+  extractedSkills?: string[],
 ): string {
   const base = (originalName || "")
     .replace(/\.(pdf|txt|json)$/i, "")
@@ -32,8 +32,8 @@ export function buildJobSearchIndex(
     uploadDateUtcYmd(uploadedAtIso),
     titleGuess ?? "",
     mimeType,
-    geminiError ?? "",
-    (geminiSkills ?? []).join(" "),
+    extractedError ?? "",
+    (extractedSkills ?? []).join(" "),
     extractedText.slice(0, MAX_EXTRACT_CHARS),
   ];
   return parts

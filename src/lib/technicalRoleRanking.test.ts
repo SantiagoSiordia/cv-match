@@ -56,7 +56,7 @@ describe("jobRequiresTechnicalCandidates", () => {
     const j = job({
       id: JOB_SA,
       titleGuess: "Solutions Architect",
-      geminiSkills: [],
+      extractedSkills: [],
     });
     expect(jobRequiresTechnicalCandidates(j, "Solutions Architect")).toBe(true);
   });
@@ -66,7 +66,7 @@ describe("jobRequiresTechnicalCandidates", () => {
       id: JOB_SA,
       originalName: "role.pdf",
       titleGuess: "Program Manager",
-      geminiSkills: ["Stakeholder management"],
+      extractedSkills: ["Stakeholder management"],
     });
     expect(jobRequiresTechnicalCandidates(j, "Program Manager")).toBe(false);
   });
@@ -77,7 +77,7 @@ describe("cvIsClearlyNonTechnical", () => {
     const c = cv({
       id: CV_SM,
       originalName: "Scrum master 1.pdf",
-      gemini: {
+      extracted: {
         name: "",
         location: "",
         currentPosition: "Scrum Master",
@@ -92,7 +92,7 @@ describe("cvIsClearlyNonTechnical", () => {
   it("does not demote scrum master with python", () => {
     const c = cv({
       id: CV_SM,
-      gemini: {
+      extracted: {
         name: "",
         location: "",
         currentPosition: "Scrum Master",
@@ -104,11 +104,11 @@ describe("cvIsClearlyNonTechnical", () => {
     expect(cvIsClearlyNonTechnical(c)).toBe(false);
   });
 
-  it("treats scrum-master filename as non-tech even when Gemini title is generic", () => {
+  it("treats scrum-master filename as non-tech even when LLM title is generic", () => {
     const c = cv({
       id: CV_SM,
       originalName: "Scrum master 1.pdf",
-      gemini: {
+      extracted: {
         name: "",
         location: "",
         currentPosition: "Consultant",
@@ -143,12 +143,12 @@ describe("applyTechnicalJobMatchOrdering", () => {
     const j = job({
       id: JOB_SA,
       titleGuess: "Solutions Architect",
-      geminiSkills: ["AWS", "Microservices"],
+      extractedSkills: ["AWS", "Microservices"],
     });
     const sm = cv({
       id: CV_SM,
       originalName: "Scrum master 1.pdf",
-      gemini: {
+      extracted: {
         name: "",
         location: "",
         currentPosition: "Scrum Master",
@@ -159,7 +159,7 @@ describe("applyTechnicalJobMatchOrdering", () => {
     const py = cv({
       id: CV_PY,
       originalName: "python_engineer.pdf",
-      gemini: {
+      extracted: {
         name: "",
         location: "",
         currentPosition: "Software Engineer",
@@ -186,7 +186,7 @@ describe("applyTechnicalJobMatchOrdering", () => {
     expect(out[1]!.cvId).toBe(CV_SM);
   });
 
-  it("uses résumé text when Gemini metadata has no technical fields", () => {
+  it("uses résumé text when extracted metadata has no technical fields", () => {
     const j = job({
       id: JOB_SA,
       titleGuess: "Solutions Architect",
@@ -194,7 +194,7 @@ describe("applyTechnicalJobMatchOrdering", () => {
     const sm = cv({
       id: CV_SM,
       originalName: "Scrum master 1.pdf",
-      gemini: {
+      extracted: {
         name: "",
         location: "",
         currentPosition: "Scrum Master",
@@ -205,7 +205,7 @@ describe("applyTechnicalJobMatchOrdering", () => {
     const py = cv({
       id: CV_PY,
       originalName: "engineer.pdf",
-      gemini: {
+      extracted: {
         name: "",
         location: "",
         currentPosition: "",
@@ -248,7 +248,7 @@ describe("applyTechnicalJobMatchOrdering", () => {
     });
     const sm = cv({
       id: CV_SM,
-      gemini: {
+      extracted: {
         name: "",
         location: "",
         currentPosition: "Scrum Master",
@@ -259,7 +259,7 @@ describe("applyTechnicalJobMatchOrdering", () => {
     const ba = cv({
       id: CV_PY,
       originalName: "ba.pdf",
-      gemini: {
+      extracted: {
         name: "",
         location: "",
         currentPosition: "Business Analyst",

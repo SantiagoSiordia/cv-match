@@ -16,11 +16,11 @@
     "local:docker:down": "docker compose down",
     "ingest:cvs": "tsx scripts/ingest-pdfs-from-directory.ts",
     "ingest:cv-dataset": "tsx scripts/ingest-github-cv-dataset.ts",
-    "migrate:cvs-layout": "tsx scripts/migrate-cvs-to-split-layout.ts"
+    "migrate:cvs-layout": "tsx scripts/migrate-cvs-to-split-layout.ts",
+    "migrate:meta-keys": "tsx scripts/migrate-meta-legacy-gemini-keys.ts"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.1019.0",
-    "@google/generative-ai": "^0.24.1",
     "csv-parse": "^5.6.0",
     "nanoid": "^5.1.7",
     "next": "16.2.1",

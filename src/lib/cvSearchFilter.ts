@@ -18,13 +18,13 @@ export function getCvSearchHaystack(cv: CvStoredMeta): string {
   if (cv.searchIndex?.trim()) return cv.searchIndex;
   return [
     cv.originalName,
-    cv.gemini?.name ?? "",
-    cv.gemini?.location ?? "",
-    cv.gemini?.currentPosition ?? "",
-    cv.gemini?.experienceSummary ?? "",
+    cv.extracted?.name ?? "",
+    cv.extracted?.location ?? "",
+    cv.extracted?.currentPosition ?? "",
+    cv.extracted?.experienceSummary ?? "",
     uploadDateUtcYmd(cv.uploadedAt),
     cv.uploadedAt,
-    ...(cv.gemini?.hardSkills ?? []),
+    ...(cv.extracted?.hardSkills ?? []),
   ]
     .join(" ")
     .toLowerCase();

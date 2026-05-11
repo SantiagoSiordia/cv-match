@@ -27,7 +27,7 @@ Listing and lookups read **`cvs-meta/*.meta.json`** only; PDF and extracted text
 
 Scripts call **`persistCvPdf`** directly with optional **`skipAi: true`** to avoid LLM cost/latency on every file:
 
-- `scripts/ingest-pdfs-from-directory.ts` — default **skips** AI unless `INGEST_CV_AI=1` or legacy `INGEST_CV_GEMINI=1`.
+- `scripts/ingest-pdfs-from-directory.ts` — default **skips** AI unless `INGEST_CV_AI=1`.
 - `scripts/ingest-github-cv-dataset.ts` — same env flag pattern for optional per-file metadata.
 
 ### 3. What `persistCvPdf` does
@@ -36,18 +36,19 @@ Order of operations (`src/lib/storage.ts`):
 
 1. **`initStorageDirs()`** — ensures `cvs-pdf`, `cvs-extracted`, `cvs-meta` exist.
 2. **Assign id** — `randomUUID()`, PDF saved as `{id}.pdf`.
-3. **Extract text** — `extractTextFromPdf(buffer)`; failures yield empty text and an internal extract error message for later `geminiError` if needed.
+3. **Extract text** — `extractTextFromPdf(buffer)`; failures yield empty text and an internal extract error message for later `extractedError` if needed.
 4. **Write** `{id}.extracted.txt`.
 5. **`lowTextWarning`** — set when `0 < extractedCharCount < LOW_TEXT_THRESHOLD_CHARS` (120 chars).
 6. **LLM structured metadata** (unless `skipAi`):
-   - If there is extracted text: **`extractCvMetadataWithProvider(extracted)`** (`src/lib/aiProvider.ts`).
-   - Provider selection: **Bedrock first** when configured (`AI_PROVIDER` / region / credentials), with **Gemini fallback** when eligible; or forced mode via `AI_PROVIDER`.
-   - Parsed shape is **`CvGeminiMeta`** (Zod in `src/lib/schemas.ts`) — the disk field is still named **`gemini`** for historical reasons.
-   - On failure: `gemini` may stay `null` and **`geminiError`** records the message (including “no provider” / extraction errors).
+   - If there is extracted text: **`extractCvMetadataWithProvider(extracted)`** (`src/lib/aiProvider.ts`) → **Amazon Bedrock** (`extractCvMetadataWithBedrock`).
+   - Parsed shape is **`CvExtractedMeta`** (Zod in `src/lib/schemas.ts`), stored under **`extracted`** on disk.
+   - On failure: `extracted` may stay `null` and **`extractedError`** records the message (including missing AWS config / extraction errors).
 7. **`searchIndex`** — **`buildCvSearchIndex`** (`src/lib/cvSearchIndex.ts`): one lowercase string combining filename, upload ISO date, LLM fields, hard skills, and the **first 14_000** characters of extracted text (for client-side search).
 8. **Write** `{id}.meta.json` with pretty-printed JSON.
 
 The returned object is the same **`CvStoredMeta`** that was written to disk.
+
+**Legacy keys:** Older files may still use `gemini` / `geminiError`. **`parseCvStoredMetaFromDisk`** maps those to **`extracted`** / **`extractedError`** on read. Run **`npm run migrate:meta-keys`** to rewrite files.
 
 ## Stored record shape (`CvStoredMeta`)
 
@@ -62,15 +63,15 @@ Defined in **`src/lib/schemas.ts`** (`cvStoredMetaSchema`):
 | `storageFileName` | PDF filename under `cvs-pdf/` (currently `{id}.pdf`). |
 | `extractedCharCount` | Length of extracted plain text. |
 | `lowTextWarning` | Optional flag when text is very short but non-empty. |
-| `gemini` | Optional **`CvGeminiMeta`** from the LLM (name, location, currentPosition, hardSkills, experienceSummary — normalized to `""` / `[]` when unknown). Accepts legacy keys `title` / `skills` on parse. |
-| `geminiError` | Optional error string when extraction failed or was skipped due to empty text. |
+| `extracted` | Optional **`CvExtractedMeta`** from Bedrock (name, location, currentPosition, hardSkills, experienceSummary — normalized to `""` / `[]` when unknown). Accepts legacy keys `title` / `skills` on parse. |
+| `extractedError` | Optional error string when extraction failed or was skipped due to empty text. |
 | `searchIndex` | Optional denormalized search blob (always set on fresh writes in `persistCvPdf`). |
 
-**`CvGeminiMeta`** (still the type name): `name`, `location`, `currentPosition`, `hardSkills` (max 40 strings), `experienceSummary`.
+**`CvExtractedMeta`**: `name`, `location`, `currentPosition`, `hardSkills` (max 40 strings), `experienceSummary`.
 
 ## Reading and listing
 
-- **`listCvs()`** — reads every `*.meta.json` in `cvs-meta/`, filters `type === "cv"`, **coerces** `gemini` through `cvGeminiMetaSchema` for backward compatibility, sorts by **`uploadedAt` descending**.
+- **`listCvs()`** — reads every `*.meta.json` in `cvs-meta/`, parses with **`parseCvStoredMetaFromDisk`**, filters `type === "cv"`, **coerces** `extracted` through **`cvExtractedMetaSchema`** for backward compatibility, sorts by **`uploadedAt` descending**.
 - **`getCvMeta(id)`** — reads one `{id}.meta.json`; returns `null` if missing or wrong type.
 
 **`GET /api/cvs`** uses `listCvs()` to return **`{ items: CvStoredMeta[] }`**.
@@ -81,11 +82,11 @@ Defined in **`src/lib/schemas.ts`** (`cvStoredMetaSchema`):
 
 If the CV has extractable text and metadata is considered **incomplete**, it:
 
-1. Re-runs **`extractCvMetadataWithProvider`** (full backfill when `cvNeedsGeminiBackfill`: no `gemini`, or missing identity, or no skills, or empty experience summary).
+1. Re-runs **`extractCvMetadataWithProvider`** (full backfill when **`cvNeedsExtractedBackfill`**: no `extracted`, or missing identity, or no skills, or empty experience summary).
 2. Optionally **`guessCvTitleWithProvider`** if `currentPosition` is still empty after extraction.
 3. Rebuilds **`searchIndex`** and **rewrites** `{id}.meta.json`.
 
-Config errors from the AI provider can be **re-thrown** so the API can surface them; some failures set **`geminiError`** and still return meta so matching can proceed.
+Config errors from Bedrock can be **re-thrown** so the API can surface them; some failures set **`extractedError`** and still return meta so matching can proceed.
 
 ## Related code (quick index)
 
@@ -96,9 +97,8 @@ Config errors from the AI provider can be **re-thrown** so the API can surface t
 | Schema types | `src/lib/schemas.ts` |
 | Search index string | `src/lib/cvSearchIndex.ts` |
 | Client search | `getCvSearchHaystack`, `cvMatchesSearchQuery` — `src/lib/cvSearchFilter.ts` |
-| LLM extraction (Bedrock) | `extractCvMetadataWithBedrock` — `src/lib/bedrock.ts` |
-| LLM extraction (Gemini) | `extractCvMetadataWithGemini` — `src/lib/gemini.ts` |
-| Provider routing | `extractCvMetadataWithProvider` — `src/lib/aiProvider.ts` |
+| LLM extraction | `extractCvMetadataWithBedrock` — `src/lib/bedrock.ts` |
+| Provider export | `extractCvMetadataWithProvider` — `src/lib/aiProvider.ts` |
 | Upload API | `src/app/api/cvs/route.ts` |
 | Single CV API | `src/app/api/cvs/[id]/route.ts` |
 

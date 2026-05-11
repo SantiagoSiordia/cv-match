@@ -548,7 +548,7 @@ export function CvsClient() {
               <ul className="grid grid-cols-1 gap-3 pb-1 lg:grid-cols-2">
                 {filteredItems.map((cv) => {
                   const displayName =
-                    cv.gemini?.name?.trim() ||
+                    cv.extracted?.name?.trim() ||
                     cv.originalName.replace(/\.[^.]+$/, "").trim() ||
                     cv.originalName;
                   return (
@@ -570,14 +570,14 @@ export function CvsClient() {
                         <p className="mt-0.5 truncate text-[0.7rem] tabular-nums text-zinc-500 dark:text-zinc-500">
                           {formatUploadDate(cv.uploadedAt)}
                         </p>
-                        {cv.gemini ? (
+                        {cv.extracted ? (
                           <dl className="mt-2 space-y-1 text-xs text-zinc-600 dark:text-zinc-400">
                             <div className="flex gap-1.5">
                               <dt className="shrink-0 font-medium text-zinc-500 dark:text-zinc-500">
                                 Location
                               </dt>
                               <dd className="min-w-0 truncate">
-                                {cv.gemini.location?.trim() || "—"}
+                                {cv.extracted.location?.trim() || "—"}
                               </dd>
                             </div>
                             <div className="flex gap-1.5">
@@ -585,7 +585,7 @@ export function CvsClient() {
                                 Position
                               </dt>
                               <dd className="min-w-0 truncate">
-                                {cv.gemini.currentPosition?.trim() || "—"}
+                                {cv.extracted.currentPosition?.trim() || "—"}
                               </dd>
                             </div>
                             <div className="flex gap-1.5">
@@ -595,13 +595,13 @@ export function CvsClient() {
                               <dd
                                 className="min-w-0 truncate"
                                 title={
-                                  cv.gemini.hardSkills?.length
-                                    ? cv.gemini.hardSkills.join(", ")
+                                  cv.extracted.hardSkills?.length
+                                    ? cv.extracted.hardSkills.join(", ")
                                     : undefined
                                 }
                               >
-                                {cv.gemini.hardSkills?.length
-                                  ? cv.gemini.hardSkills.join(", ")
+                                {cv.extracted.hardSkills?.length
+                                  ? cv.extracted.hardSkills.join(", ")
                                   : "—"}
                               </dd>
                             </div>
@@ -612,9 +612,9 @@ export function CvsClient() {
                             Low text extracted
                           </p>
                         ) : null}
-                        {cv.geminiError ? (
+                        {cv.extractedError ? (
                           <p className="mt-1 text-xs text-red-700 dark:text-red-300">
-                            AI: {cv.geminiError}
+                            AI: {cv.extractedError}
                           </p>
                         ) : null}
                       </div>

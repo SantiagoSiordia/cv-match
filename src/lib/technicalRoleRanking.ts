@@ -71,7 +71,7 @@ export function jobRequiresTechnicalCandidates(
   displayTitle: string,
 ): boolean {
   const blob = norm(
-    `${displayTitle} ${job.originalName.replace(/\.[^.]+$/, "")} ${(job.geminiSkills ?? []).join(" ")}`,
+    `${displayTitle} ${job.originalName.replace(/\.[^.]+$/, "")} ${(job.extractedSkills ?? []).join(" ")}`,
   );
   for (const phrase of TECH_JOB_PHRASES) {
     if (containsPhrase(blob, phrase)) return true;
@@ -206,9 +206,9 @@ function technicalSkillHit(skillNorm: string): boolean {
 /** True when CV metadata shows engineering / technical skills (or a technical title). */
 export function cvHasTechnicalEvidence(cv: CvStoredMeta | undefined): boolean {
   if (!cv) return false;
-  const pos = norm(cv.gemini?.currentPosition ?? "");
+  const pos = norm(cv.extracted?.currentPosition ?? "");
   if (pos && TECH_POSITION_RE.test(pos)) return true;
-  const skills = cv.gemini?.hardSkills ?? [];
+  const skills = cv.extracted?.hardSkills ?? [];
   for (const raw of skills) {
     const sn = norm(raw);
     if (sn.length && technicalSkillHit(sn)) return true;
@@ -218,7 +218,7 @@ export function cvHasTechnicalEvidence(cv: CvStoredMeta | undefined): boolean {
 
 /**
  * Whole-word / phrase signals in extracted résumé text (same head window as embeddings).
- * Fills gaps when Gemini left `hardSkills` / title empty so we still detect engineers.
+ * Fills gaps when extraction left `hardSkills` / title empty so we still detect engineers.
  */
 const TECH_RESUME_SINGLE_TOKENS = new Set<string>([
   "angular",
@@ -334,7 +334,7 @@ export function cvHasTechnicalEvidenceWithText(
 }
 
 /**
- * Filename hints for agile/PM-style CVs. Used even when Gemini filled a generic
+ * Filename hints for agile/PM-style CVs. Used even when extraction filled a generic
  * `currentPosition` (e.g. “Consultant”) — otherwise “Scrum master 1.pdf” stayed in the
  * technical tier and won on embedding alone.
  */
@@ -388,7 +388,7 @@ function fileNameSuggestsTechnicalRole(cv: CvStoredMeta): boolean {
 
 function cvRoleLooksNonTechnical(cv: CvStoredMeta | undefined): boolean {
   if (!cv) return false;
-  const pos = norm(cv.gemini?.currentPosition ?? "");
+  const pos = norm(cv.extracted?.currentPosition ?? "");
   for (const phrase of NON_TECH_POSITION_PHRASES) {
     if (containsPhrase(pos, phrase)) return true;
   }
@@ -419,7 +419,7 @@ export function applyTechnicalJobMatchOrdering(
   matches: CvMatchRow[],
   cvById: Map<string, CvStoredMeta>,
   compareRows: (a: CvMatchRow, b: CvMatchRow) => number,
-  /** Extracted résumé text per CV (enables tech detection when Gemini skills are empty). */
+  /** Extracted résumé text per CV (enables tech detection when LLM skills are empty). */
   cvTextById?: ReadonlyMap<string, string>,
 ): CvMatchRow[] {
   if (!jobRequiresTechnicalCandidates(job, jobDisplayTitle)) {

@@ -21,7 +21,7 @@ export function getJobSearchHaystack(job: JobStoredMeta): string {
     job.mimeType,
     job.uploadedAt,
     uploadDateUtcYmd(job.uploadedAt),
-    job.geminiError ?? "",
+    job.extractedError ?? "",
   ]
     .join(" ")
     .toLowerCase();

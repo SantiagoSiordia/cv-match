@@ -1,4 +1,4 @@
-import type { CvGeminiMeta } from "@/lib/schemas";
+import type { CvExtractedMeta } from "@/lib/schemas";
 
 const MAX_EXTRACT_CHARS = 14_000;
 
@@ -18,7 +18,7 @@ function uploadDateUtcYmd(iso: string): string {
 export function buildCvSearchIndex(
   originalName: string,
   uploadedAtIso: string,
-  gemini: CvGeminiMeta | null | undefined,
+  extracted: CvExtractedMeta | null | undefined,
   extractedText: string,
 ): string {
   const baseName = (originalName || "").replace(/\.pdf$/i, "").trim();
@@ -27,11 +27,11 @@ export function buildCvSearchIndex(
     originalName || "",
     uploadedAtIso,
     uploadDateUtcYmd(uploadedAtIso),
-    gemini?.name ?? "",
-    gemini?.location ?? "",
-    gemini?.currentPosition ?? "",
-    gemini?.experienceSummary ?? "",
-    ...(gemini?.hardSkills ?? []),
+    extracted?.name ?? "",
+    extracted?.location ?? "",
+    extracted?.currentPosition ?? "",
+    extracted?.experienceSummary ?? "",
+    ...(extracted?.hardSkills ?? []),
     extractedText.slice(0, MAX_EXTRACT_CHARS),
   ];
   return parts

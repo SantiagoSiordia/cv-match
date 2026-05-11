@@ -17,7 +17,7 @@ export function normalizeSkillLabel(raw: string): string {
 }
 
 function displayNameForCv(cv: CvStoredMeta): string {
-  const n = cv.gemini?.name?.trim();
+  const n = cv.extracted?.name?.trim();
   if (n) return n;
   return cv.originalName.replace(/\.[^.]+$/, "") || cv.originalName;
 }
@@ -164,7 +164,7 @@ export type AnalyticsOverview = {
 
 function cvSkillSet(cv: CvStoredMeta): Set<string> {
   const set = new Set<string>();
-  for (const s of cv.gemini?.hardSkills ?? []) {
+  for (const s of cv.extracted?.hardSkills ?? []) {
     const k = normalizeSkillLabel(s);
     if (k.length) set.add(k);
   }
@@ -177,7 +177,7 @@ function computeTrainingOpportunities(
 ): TrainingOpportunity[] {
   const skillToJobs = new Map<string, Set<string>>();
   for (const job of jobs) {
-    for (const s of job.geminiSkills ?? []) {
+    for (const s of job.extractedSkills ?? []) {
       const k = normalizeSkillLabel(s);
       if (!k.length) continue;
       let set = skillToJobs.get(k);
@@ -318,7 +318,7 @@ export async function computeAnalyticsOverview(input: {
         })) ?? [];
     const topMatchSkills =
       bestEmb != null
-        ? (cvById.get(bestEmb.cvId)?.gemini?.hardSkills ?? []).filter(
+        ? (cvById.get(bestEmb.cvId)?.extracted?.hardSkills ?? []).filter(
             (s): s is string => typeof s === "string" && s.trim().length > 0,
           )
         : [];

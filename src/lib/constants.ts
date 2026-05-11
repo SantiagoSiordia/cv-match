@@ -19,15 +19,5 @@ export const DEFAULT_BEDROCK_TEXT_MODEL =
 /** Amazon Bedrock Titan Embeddings v2 (`InvokeModel`). */
 export const DEFAULT_BEDROCK_EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0";
 
-/**
- * Google Gemini (fallback when Bedrock is unavailable). 2.5 Flash-Lite is the
- * current low-cost tier (2.0 Flash-Lite is retired for new API users).
- * Override with GEMINI_TEXT_MODEL.
- */
-export const DEFAULT_GEMINI_TEXT_MODEL = "gemini-2.5-flash-lite";
-
-/** Gemini embedding model (`embedContent` REST API). See https://ai.google.dev/gemini-api/docs/embeddings */
-export const DEFAULT_GEMINI_EMBEDDING_MODEL = "gemini-embedding-001";
-
 /** Max characters sent to the embedding API per document (truncate tail). */
 export const MAX_EMBEDDING_CHARS = 12_000;

@@ -5,13 +5,14 @@ import {
 import {
   compatibilityBatchResponseSchema,
   compatibilityResultSchema,
-  cvGeminiMetaSchema,
+  cvExtractedMetaSchema,
   jobSkillsExtractionSchema,
   topMatchJustificationsResponseSchema,
   type CompatibilityResult,
-  type CvGeminiMeta,
+  type CvExtractedMeta,
   type JobSkillsExtraction,
 } from "@/lib/schemas";
+import { resolveAwsRegion } from "@/lib/awsRegion";
 import {
   DEFAULT_BEDROCK_TEXT_MODEL,
 } from "@/lib/constants";
@@ -35,18 +36,14 @@ let cachedClient: BedrockRuntimeClient | null = null;
 let cachedRegion: string | null = null;
 
 function resolveRegion(): string {
-  return (
-    process.env.AWS_REGION?.trim() ||
-    process.env.AWS_DEFAULT_REGION?.trim() ||
-    ""
-  );
+  return resolveAwsRegion();
 }
 
 export function getBedrockRuntimeClient(): BedrockRuntimeClient {
   const region = resolveRegion();
   if (!region) {
     throw new BedrockConfigError(
-      "Set AWS_REGION or AWS_DEFAULT_REGION for Amazon Bedrock.",
+      "Set AWS_REGION or AWS_DEFAULT_REGION, or add region under your profile in ~/.aws/config (see AWS_PROFILE).",
     );
   }
   if (!cachedClient || cachedRegion !== region) {
@@ -132,7 +129,7 @@ export function parseJsonObject<T>(raw: string): T {
 
 export async function extractCvMetadataWithBedrock(
   cvText: string,
-): Promise<CvGeminiMeta> {
+): Promise<CvExtractedMeta> {
   const prompt = `You extract structured data from a CV/resume text.
 
 Return ONLY JSON with EXACTLY these keys (always present):
@@ -153,7 +150,7 @@ ${truncateForPrompt(cvText, 24_000)}
 
   const text = await invokeClaudeJson(prompt);
   const parsed = parseJsonObject<unknown>(text);
-  return cvGeminiMetaSchema.parse(parsed);
+  return cvExtractedMetaSchema.parse(parsed);
 }
 
 /** Short professional title from résumé text only (for backfill when `title` was missing). */

@@ -13,10 +13,11 @@ vi.mock("@/lib/extractText", () => ({
 
 vi.mock("@/lib/aiProvider", () => ({
   AiProviderConfigError: class AiProviderConfigError extends Error {},
-  GeminiConfigError: class GeminiConfigError extends Error {},
   extractCvMetadataWithProvider: vi.fn(async () => ({
     name: "Test Candidate",
-    skills: ["Testing"],
+    location: "",
+    currentPosition: "",
+    hardSkills: ["Testing"],
     experienceSummary: "Several years of testing.",
   })),
   guessJobTitleWithProvider: vi.fn(async () => "QA Engineer"),

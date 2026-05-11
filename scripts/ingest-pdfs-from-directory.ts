@@ -4,7 +4,7 @@
  * Usage (from repo root):
  *   npx tsx scripts/ingest-pdfs-from-directory.ts /path/to/pdf-folder
  *
- * By default skips Gemini per file (fast, no API usage). To extract metadata:
+ * By default skips Bedrock metadata per file (fast, no API usage). To extract metadata:
  *   INGEST_CV_AI=1 npx tsx scripts/ingest-pdfs-from-directory.ts /path/to/pdf
  */
 
@@ -51,12 +51,10 @@ async function main() {
     process.exit(1);
   }
 
-  const skipAi =
-    process.env.INGEST_CV_AI !== "1" &&
-    process.env.INGEST_CV_GEMINI !== "1";
+  const skipAi = process.env.INGEST_CV_AI !== "1";
   if (skipAi) {
     console.log(
-      "INGEST_CV_AI=1 (or legacy INGEST_CV_GEMINI=1) not set — skipping AI metadata per file.",
+      "INGEST_CV_AI=1 not set — skipping AI metadata per file.",
     );
   }
 

@@ -353,9 +353,9 @@ export function JobsClient() {
                       Low extracted text — check the source file.
                     </p>
                   ) : null}
-                  {job.geminiError ? (
+                  {job.extractedError ? (
                     <p className="mt-2 text-xs text-red-700 dark:text-red-300">
-                      AI title: {job.geminiError}
+                      AI title: {job.extractedError}
                     </p>
                   ) : null}
                 </div>

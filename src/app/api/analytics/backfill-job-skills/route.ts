@@ -33,7 +33,7 @@ export async function POST(request: Request) {
       ? jobs.filter((j) => j.id === targetId)
       : jobs.filter(
           (j) =>
-            (!j.geminiSkills || j.geminiSkills.length === 0) &&
+            (!j.extractedSkills || j.extractedSkills.length === 0) &&
             j.extractedCharCount > 0,
         );
 

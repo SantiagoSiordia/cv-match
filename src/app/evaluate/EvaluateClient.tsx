@@ -244,7 +244,7 @@ export function EvaluateClient() {
     }
     const progressItems: ProgressRow[] = selectedIds.map((id) => {
       const c = cvs.find((x) => x.id === id);
-      const displayName = (c?.gemini?.name ?? c?.originalName ?? id).trim();
+      const displayName = (c?.extracted?.name ?? c?.originalName ?? id).trim();
       return { cvId: id, displayName: displayName || id, state: "pending" };
     });
     setEvaluateProgress({ items: progressItems });
@@ -498,11 +498,11 @@ export function EvaluateClient() {
                         {filteredCvs.map((c) => {
                           const selected = !!selectedCv[c.id];
                           const displayName = (
-                            c.gemini?.name?.trim() ||
+                            c.extracted?.name?.trim() ||
                             c.originalName.replace(/\.[^.]+$/, "").trim() ||
                             c.originalName
                           ).trim();
-                          const headline = c.gemini?.currentPosition?.trim();
+                          const headline = c.extracted?.currentPosition?.trim();
                           const initials = initialsFromDisplayName(displayName);
                           const dateStr = shortUploadDate(c.uploadedAt);
                           return (

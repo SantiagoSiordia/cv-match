@@ -7,6 +7,8 @@ const turbopackRoot = path.dirname(fileURLToPath(import.meta.url));
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  /** LAN dev: allow HMR / dev bundles when opening http://<this-host>:3000 from another device. */
+  allowedDevOrigins: ["192.168.1.30"],
   turbopack: {
     root: turbopackRoot,
   },

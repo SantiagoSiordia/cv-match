@@ -30,7 +30,7 @@ function isRetryableLlmThrottleMessage(msg: string): boolean {
 
 /**
  * Retries fn on likely rate-limit / transient errors (exponential backoff + jitter).
- * Gemini text calls already retry internally; this layer helps Bedrock and cross-provider paths.
+ * Retries Bedrock (and similar) calls on transient overload / rate limits.
  */
 export async function withLlmThrottleRetries<T>(fn: () => Promise<T>): Promise<T> {
   const max = llmRetryMaxAttempts();

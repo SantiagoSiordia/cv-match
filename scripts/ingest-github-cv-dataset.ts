@@ -44,9 +44,7 @@ function loadDotEnv() {
 
 async function main() {
   loadDotEnv();
-  const skipAi =
-    process.env.INGEST_CV_AI !== "1" &&
-    process.env.INGEST_CV_GEMINI !== "1";
+  const skipAi = process.env.INGEST_CV_AI !== "1";
   const conc = Math.max(
     1,
     Math.min(12, Number(process.env.INGEST_CONCURRENCY) || 3),
@@ -57,7 +55,7 @@ async function main() {
 
   if (skipAi) {
     console.log(
-      "Skipping AI metadata (set INGEST_CV_AI=1 or legacy INGEST_CV_GEMINI=1 to enable).",
+      "Skipping AI metadata (set INGEST_CV_AI=1 to enable).",
     );
   }
   console.log(`Concurrency: ${conc}`);

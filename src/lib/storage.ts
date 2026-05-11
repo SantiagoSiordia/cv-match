@@ -26,13 +26,19 @@ import {
   AiProviderConfigError,
   extractCvMetadataWithProvider,
   extractJobSkillsWithProvider,
-  GeminiConfigError,
   guessCvTitleWithProvider,
   guessJobTitleWithProvider,
 } from "@/lib/aiProvider";
+import { BedrockConfigError } from "@/lib/bedrock";
 import { buildCvSearchIndex } from "@/lib/cvSearchIndex";
 import { buildJobSearchIndex } from "@/lib/jobSearchIndex";
-import { cvGeminiMetaSchema, type CvStoredMeta, type JobStoredMeta } from "@/lib/schemas";
+import {
+  cvExtractedMetaSchema,
+  parseCvStoredMetaFromDisk,
+  parseJobStoredMetaFromDisk,
+  type CvStoredMeta,
+  type JobStoredMeta,
+} from "@/lib/schemas";
 
 export class StorageError extends Error {
   constructor(
@@ -84,7 +90,7 @@ function assertSize(size: number) {
 }
 
 /**
- * Persist a CV PDF with extracted text and optional LLM metadata (Bedrock preferred, Gemini fallback).
+ * Persist a CV PDF with extracted text and optional LLM metadata (Amazon Bedrock).
  * Use `skipAi: true` for bulk imports to avoid API cost/latency.
  */
 export async function persistCvPdf(
@@ -112,28 +118,28 @@ export async function persistCvPdf(
     extracted.length > 0 && extracted.length < LOW_TEXT_THRESHOLD_CHARS;
 
   const skipAi = options.skipAi === true;
-  let gemini: CvStoredMeta["gemini"] = null;
-  let geminiError: string | undefined;
+  let cvExtracted: CvStoredMeta["extracted"] = null;
+  let extractedError: string | undefined;
 
   if (!skipAi) {
     if (extracted.length > 0) {
       try {
-        gemini = await extractCvMetadataWithProvider(extracted);
+        cvExtracted = await extractCvMetadataWithProvider(extracted);
       } catch (e) {
-        gemini = null;
+        cvExtracted = null;
         if (
           e instanceof AiProviderConfigError ||
-          e instanceof GeminiConfigError
+          e instanceof BedrockConfigError
         ) {
-          geminiError = e.message;
+          extractedError = e.message;
         } else if (e instanceof Error) {
-          geminiError = e.message;
+          extractedError = e.message;
         } else {
-          geminiError = "Metadata extraction failed";
+          extractedError = "Metadata extraction failed";
         }
       }
     } else {
-      geminiError = extractError ?? "No text extracted from PDF";
+      extractedError = extractError ?? "No text extracted from PDF";
     }
   }
 
@@ -146,12 +152,12 @@ export async function persistCvPdf(
     storageFileName,
     extractedCharCount: extracted.length,
     ...(lowTextWarning ? { lowTextWarning: true } : {}),
-    gemini,
-    ...(geminiError ? { geminiError } : {}),
+    extracted: cvExtracted,
+    ...(extractedError ? { extractedError } : {}),
     searchIndex: buildCvSearchIndex(
       originalName || "cv.pdf",
       uploadedAt,
-      gemini,
+      cvExtracted,
       extracted,
     ),
   };
@@ -170,11 +176,11 @@ export async function saveCvFromFile(file: File): Promise<CvStoredMeta> {
   return persistCvPdf(buffer, file.name || "cv.pdf", { skipAi: false });
 }
 
-function coerceGeminiOnMeta(meta: CvStoredMeta): CvStoredMeta {
-  if (!meta.gemini) return meta;
-  const r = cvGeminiMetaSchema.safeParse(meta.gemini);
+function coerceExtractedOnMeta(meta: CvStoredMeta): CvStoredMeta {
+  if (!meta.extracted) return meta;
+  const r = cvExtractedMetaSchema.safeParse(meta.extracted);
   if (!r.success) return meta;
-  return { ...meta, gemini: r.data };
+  return { ...meta, extracted: r.data };
 }
 
 export async function listCvs(): Promise<CvStoredMeta[]> {
@@ -186,8 +192,8 @@ export async function listCvs(): Promise<CvStoredMeta[]> {
     const full = path.join(cvsMetaDir(), name);
     try {
       const raw = await readFile(full, "utf8");
-      const parsed = JSON.parse(raw) as CvStoredMeta;
-      if (parsed.type === "cv") metas.push(coerceGeminiOnMeta(parsed));
+      const parsed = parseCvStoredMetaFromDisk(JSON.parse(raw));
+      if (parsed?.type === "cv") metas.push(coerceExtractedOnMeta(parsed));
     } catch {
       /* skip broken meta */
     }
@@ -203,9 +209,9 @@ export async function getCvMeta(id: string): Promise<CvStoredMeta | null> {
   await initStorageDirs();
   try {
     const raw = await readFile(cvMetaFile(id), "utf8");
-    const parsed = JSON.parse(raw) as CvStoredMeta;
-    if (parsed.type !== "cv") return null;
-    return coerceGeminiOnMeta(parsed);
+    const parsed = parseCvStoredMetaFromDisk(JSON.parse(raw));
+    if (!parsed || parsed.type !== "cv") return null;
+    return coerceExtractedOnMeta(parsed);
   } catch {
     return null;
   }
@@ -222,9 +228,9 @@ export async function readCvExtractedText(id: string): Promise<string | null> {
 }
 
 /** True when we should run full LLM extraction (missing or thin metadata). */
-function cvNeedsGeminiBackfill(meta: CvStoredMeta): boolean {
-  if (!meta.gemini) return true;
-  const parsed = cvGeminiMetaSchema.safeParse(meta.gemini);
+function cvNeedsExtractedBackfill(meta: CvStoredMeta): boolean {
+  if (!meta.extracted) return true;
+  const parsed = cvExtractedMetaSchema.safeParse(meta.extracted);
   const g = parsed.success ? parsed.data : null;
   if (!g) return true;
   const hasIdentity = !!(g.name.trim() || g.currentPosition.trim());
@@ -238,8 +244,8 @@ function cvNeedsGeminiBackfill(meta: CvStoredMeta): boolean {
  * Before job matching: backfill LLM metadata (name, location, currentPosition,
  * hardSkills, experienceSummary) when incomplete, then infer currentPosition if
  * still missing. Updates `searchIndex`. Re-throws
- * `AiProviderConfigError` / `GeminiConfigError` when no LLM provider is available.
- * On extraction failure with no prior gemini blob, sets `geminiError` and still returns
+ * `AiProviderConfigError` / `BedrockConfigError` when Bedrock is not configured.
+ * On extraction failure with no prior extracted blob, sets `extractedError` and still returns
  * meta for the match to proceed.
  */
 export async function prepareCvForMatch(cvId: string): Promise<CvStoredMeta | null> {
@@ -249,35 +255,35 @@ export async function prepareCvForMatch(cvId: string): Promise<CvStoredMeta | nu
   const text = (await readCvExtractedText(cvId)) ?? "";
   if (!text.trim()) return meta;
 
-  let gemini = meta.gemini ?? null;
-  let geminiError: string | undefined = meta.geminiError;
+  let cvExtracted = meta.extracted ?? null;
+  let extractedError: string | undefined = meta.extractedError;
   let changed = false;
 
-  if (cvNeedsGeminiBackfill(meta)) {
+  if (cvNeedsExtractedBackfill(meta)) {
     try {
-      gemini = await extractCvMetadataWithProvider(text);
-      geminiError = undefined;
+      cvExtracted = await extractCvMetadataWithProvider(text);
+      extractedError = undefined;
       changed = true;
     } catch (e) {
-      if (e instanceof AiProviderConfigError || e instanceof GeminiConfigError) {
+      if (e instanceof AiProviderConfigError || e instanceof BedrockConfigError) {
         throw e;
       }
-      if (!meta.gemini) {
-        geminiError =
+      if (!meta.extracted) {
+        extractedError =
           e instanceof Error ? e.message : "Metadata extraction failed";
-        gemini = null;
+        cvExtracted = null;
         changed = true;
       } else {
-        gemini = meta.gemini;
+        cvExtracted = meta.extracted;
       }
     }
   }
 
-  if (gemini && !gemini.currentPosition.trim()) {
+  if (cvExtracted && !cvExtracted.currentPosition.trim()) {
     try {
       const pos = await guessCvTitleWithProvider(text);
       if (pos?.trim()) {
-        gemini = { ...gemini, currentPosition: pos.trim() };
+        cvExtracted = { ...cvExtracted, currentPosition: pos.trim() };
         changed = true;
       }
     } catch {
@@ -289,18 +295,18 @@ export async function prepareCvForMatch(cvId: string): Promise<CvStoredMeta | nu
 
   const next: CvStoredMeta = {
     ...meta,
-    gemini,
+    extracted: cvExtracted,
     searchIndex: buildCvSearchIndex(
       meta.originalName,
       meta.uploadedAt,
-      gemini,
+      cvExtracted,
       text,
     ),
   };
-  if (geminiError !== undefined) {
-    next.geminiError = geminiError;
+  if (extractedError !== undefined) {
+    next.extractedError = extractedError;
   } else {
-    delete (next as { geminiError?: string }).geminiError;
+    delete (next as { extractedError?: string }).extractedError;
   }
 
   await writeFile(cvMetaFile(cvId), JSON.stringify(next, null, 2), "utf8");
@@ -410,48 +416,48 @@ export async function persistJobDescriptionFromBuffer(
   const skipTitle = options.skipTitleInference === true;
   const skipSkillExtraction = options.skipSkillExtraction === true;
   let titleGuess: string | null | undefined;
-  let geminiError: string | undefined;
-  let geminiSkills: string[] | undefined;
-  let geminiSkillsError: string | undefined;
+  let extractedError: string | undefined;
+  let extractedSkills: string[] | undefined;
+  let extractedSkillsError: string | undefined;
 
   if (skipTitle) {
     const t = options.explicitTitleGuess?.trim();
     titleGuess = t?.length ? t : null;
     if (extracted.length === 0) {
-      geminiError = extractError ?? "No text extracted";
+      extractedError = extractError ?? "No text extracted";
     }
   } else if (extracted.length > 0) {
     try {
       titleGuess = await guessJobTitleWithProvider(extracted);
     } catch (e) {
-      if (e instanceof AiProviderConfigError || e instanceof GeminiConfigError) {
-        geminiError = e.message;
+      if (e instanceof AiProviderConfigError || e instanceof BedrockConfigError) {
+        extractedError = e.message;
       } else if (e instanceof Error) {
-        geminiError = e.message;
+        extractedError = e.message;
       } else {
-        geminiError = "Title inference failed";
+        extractedError = "Title inference failed";
       }
     }
   } else {
-    geminiError = extractError ?? "No text extracted";
+    extractedError = extractError ?? "No text extracted";
   }
 
   if (
     !skipTitle &&
     !skipSkillExtraction &&
     extracted.length > 0 &&
-    !geminiError
+    !extractedError
   ) {
     try {
       const out = await extractJobSkillsWithProvider(extracted);
-      geminiSkills = out.skills;
+      extractedSkills = out.skills;
     } catch (e) {
-      if (e instanceof AiProviderConfigError || e instanceof GeminiConfigError) {
-        geminiSkillsError = e.message;
+      if (e instanceof AiProviderConfigError || e instanceof BedrockConfigError) {
+        extractedSkillsError = e.message;
       } else if (e instanceof Error) {
-        geminiSkillsError = e.message;
+        extractedSkillsError = e.message;
       } else {
-        geminiSkillsError = "Skill extraction failed";
+        extractedSkillsError = "Skill extraction failed";
       }
     }
   }
@@ -467,17 +473,17 @@ export async function persistJobDescriptionFromBuffer(
     extractedCharCount: extracted.length,
     ...(lowTextWarning ? { lowTextWarning: true } : {}),
     titleGuess: titleGuess ?? null,
-    ...(geminiSkills?.length ? { geminiSkills } : {}),
-    ...(geminiSkillsError ? { geminiSkillsError } : {}),
-    ...(geminiError ? { geminiError } : {}),
+    ...(extractedSkills?.length ? { extractedSkills } : {}),
+    ...(extractedSkillsError ? { extractedSkillsError } : {}),
+    ...(extractedError ? { extractedError } : {}),
     searchIndex: buildJobSearchIndex(
       originalName || "job-description",
       uploadedAt,
       titleGuess ?? null,
       effectiveMime,
       extracted,
-      geminiError,
-      geminiSkills,
+      extractedError,
+      extractedSkills,
     ),
   };
 
@@ -492,7 +498,7 @@ export async function persistJobDescriptionFromCsvRow(input: {
   sourceFileName: string;
   sourceRequirementId?: string;
   titleGuess: string | null;
-  geminiSkills: string[];
+  extractedSkills: string[];
 }): Promise<JobStoredMeta> {
   await initStorageDirs();
   const id = randomUUID();
@@ -530,7 +536,9 @@ export async function persistJobDescriptionFromCsvRow(input: {
     ...(input.sourceRequirementId
       ? { sourceRequirementId: input.sourceRequirementId }
       : {}),
-    ...(input.geminiSkills.length ? { geminiSkills: input.geminiSkills } : {}),
+    ...(input.extractedSkills.length
+      ? { extractedSkills: input.extractedSkills }
+      : {}),
     searchIndex: buildJobSearchIndex(
       input.originalName,
       uploadedAt,
@@ -538,7 +546,7 @@ export async function persistJobDescriptionFromCsvRow(input: {
       "application/json",
       input.extracted,
       undefined,
-      input.geminiSkills,
+      input.extractedSkills,
     ),
   };
 
@@ -591,7 +599,7 @@ export async function saveJobDescriptionsFromCsvFile(file: File): Promise<{
     try {
       const extracted = buildExtractedNarrativeFromRow(row);
       const titleGuess = inferTitleGuessFromRow(row);
-      const geminiSkills = inferSkillsFromRow(row);
+      const extractedSkills = inferSkillsFromRow(row);
       const sourceRequirementId = sourceRequirementIdFromRow(row);
       const originalName = rowOriginalDisplayName(sourceFileName, row);
 
@@ -602,7 +610,7 @@ export async function saveJobDescriptionsFromCsvFile(file: File): Promise<{
         sourceFileName,
         sourceRequirementId,
         titleGuess,
-        geminiSkills,
+        extractedSkills,
       });
       items.push(meta);
     } catch (e) {
@@ -654,8 +662,8 @@ export async function listJobDescriptions(): Promise<JobStoredMeta[]> {
         path.join(jobDescriptionsDir(), name),
         "utf8",
       );
-      const parsed = JSON.parse(raw) as JobStoredMeta;
-      if (parsed.type === "job_description") metas.push(parsed);
+      const parsed = parseJobStoredMetaFromDisk(JSON.parse(raw));
+      if (parsed?.type === "job_description") metas.push(parsed);
     } catch {
       /* skip */
     }
@@ -671,8 +679,8 @@ export async function getJobMeta(id: string): Promise<JobStoredMeta | null> {
   await initStorageDirs();
   try {
     const raw = await readFile(jdMetaPath(id), "utf8");
-    const parsed = JSON.parse(raw) as JobStoredMeta;
-    return parsed.type === "job_description" ? parsed : null;
+    const parsed = parseJobStoredMetaFromDisk(JSON.parse(raw));
+    return parsed?.type === "job_description" ? parsed : null;
   } catch {
     return null;
   }
@@ -689,15 +697,15 @@ export async function saveJobMeta(meta: JobStoredMeta): Promise<void> {
       meta.titleGuess ?? null,
       meta.mimeType,
       extracted,
-      meta.geminiError,
-      meta.geminiSkills,
+      meta.extractedError,
+      meta.extractedSkills,
     ),
   };
   await writeFile(jdMetaPath(meta.id), JSON.stringify(full, null, 2), "utf8");
 }
 
 /**
- * Runs LLM skill extraction for one job and persists `geminiSkills` / `geminiSkillsError`.
+ * Runs LLM skill extraction for one job and persists `extractedSkills` / `extractedSkillsError`.
  */
 export async function backfillJobSkillsForJob(jobId: string): Promise<
   | { ok: true; skills: string[] }
@@ -709,20 +717,20 @@ export async function backfillJobSkillsForJob(jobId: string): Promise<
   if (!text?.trim()) return { ok: false, error: "NO_TEXT" };
   try {
     const { skills } = await extractJobSkillsWithProvider(text);
-    const next: JobStoredMeta = { ...meta, geminiSkills: skills };
-    delete next.geminiSkillsError;
+    const next: JobStoredMeta = { ...meta, extractedSkills: skills };
+    delete next.extractedSkillsError;
     await saveJobMeta(next);
     return { ok: true, skills };
   } catch (e) {
     const msg =
-      e instanceof AiProviderConfigError || e instanceof GeminiConfigError
+      e instanceof AiProviderConfigError || e instanceof BedrockConfigError
         ? e.message
         : e instanceof Error
           ? e.message
           : "Skill extraction failed";
     const next: JobStoredMeta = {
       ...meta,
-      geminiSkillsError: msg,
+      extractedSkillsError: msg,
     };
     await saveJobMeta(next);
     return { ok: false, error: msg };
