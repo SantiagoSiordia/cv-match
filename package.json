@@ -18,7 +18,8 @@
     "ingest:cv-dataset": "tsx scripts/ingest-github-cv-dataset.ts",
     "migrate:cvs-layout": "tsx scripts/migrate-cvs-to-split-layout.ts",
     "migrate:meta-keys": "tsx scripts/migrate-meta-legacy-gemini-keys.ts",
-    "clear:data": "tsx scripts/clear-resumes-and-roles.ts"
+    "clear:data": "tsx scripts/clear-resumes-and-roles.ts",
+    "ingest:xlsb": "tsx scripts/ingest-xlsb-data.ts"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.1019.0",
@@ -43,9 +44,11 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.1",
     "jsdom": "^29.0.1",
+    "pdf-lib": "^1.17.1",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
     "typescript": "^5",
-    "vitest": "^4.1.1"
+    "vitest": "^4.1.1",
+    "xlsx": "^0.18.5"
   }
 }
