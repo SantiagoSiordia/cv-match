@@ -3,6 +3,7 @@ import {
   compareCvMatchRowsForRanking,
   cosineSimilarity,
   cosineToPercent,
+  selectJobVectorForCvMatrix,
 } from "@/lib/embeddings";
 import type { CvMatchRow } from "@/lib/embeddings";
 
@@ -18,6 +19,98 @@ describe("cosineSimilarity", () => {
 
   it("returns 0 for length mismatch", () => {
     expect(cosineSimilarity([1], [1, 1])).toBe(0);
+  });
+});
+
+describe("selectJobVectorForCvMatrix (cached analytics job-side vector)", () => {
+  const fp = "abc123";
+  const vQuery = [0, 1, 0];
+  const vDoc = [1, 0, 0];
+
+  it("uses query vector when queryFingerprint is missing (legacy index)", () => {
+    const r = selectJobVectorForCvMatrix(
+      { fingerprint: fp, values: vDoc, queryValues: vQuery },
+      fp,
+      false,
+    );
+    expect(r.vector).toBe(vQuery);
+    expect(r.enqueueBedrockQueryEmbed).toBe(false);
+  });
+
+  it("uses query vector when queryFingerprint matches current JD hash", () => {
+    const r = selectJobVectorForCvMatrix(
+      {
+        fingerprint: fp,
+        values: vDoc,
+        queryFingerprint: fp,
+        queryValues: vQuery,
+      },
+      fp,
+      false,
+    );
+    expect(r.vector).toBe(vQuery);
+    expect(r.enqueueBedrockQueryEmbed).toBe(false);
+  });
+
+  it("uses document vector when query does not match but doc fingerprint matches", () => {
+    const r = selectJobVectorForCvMatrix(
+      {
+        fingerprint: fp,
+        values: vDoc,
+        queryFingerprint: "stale",
+        queryValues: vQuery,
+      },
+      fp,
+      false,
+    );
+    expect(r.vector).toBe(vDoc);
+    expect(r.enqueueBedrockQueryEmbed).toBe(false);
+  });
+
+  it("when not ensuring embeddings, still uses stale query vector if fingerprints disagree", () => {
+    const r = selectJobVectorForCvMatrix(
+      {
+        fingerprint: "old-doc",
+        values: vDoc,
+        queryFingerprint: "stale-q",
+        queryValues: vQuery,
+      },
+      fp,
+      false,
+    );
+    expect(r.vector).toBe(vQuery);
+    expect(r.enqueueBedrockQueryEmbed).toBe(false);
+  });
+
+  it("when not ensuring embeddings, falls back to stale document vector", () => {
+    const r = selectJobVectorForCvMatrix(
+      { fingerprint: "old", values: vDoc },
+      fp,
+      false,
+    );
+    expect(r.vector).toBe(vDoc);
+    expect(r.enqueueBedrockQueryEmbed).toBe(false);
+  });
+
+  it("when ensuring embeddings and nothing matches, requests Bedrock query embed", () => {
+    const r = selectJobVectorForCvMatrix(
+      {
+        fingerprint: "old",
+        values: vDoc,
+        queryFingerprint: "stale",
+        queryValues: vQuery,
+      },
+      fp,
+      true,
+    );
+    expect(r.vector).toBeUndefined();
+    expect(r.enqueueBedrockQueryEmbed).toBe(true);
+  });
+
+  it("when index has no vectors, returns undefined without Bedrock", () => {
+    const r = selectJobVectorForCvMatrix(undefined, fp, false);
+    expect(r.vector).toBeUndefined();
+    expect(r.enqueueBedrockQueryEmbed).toBe(false);
   });
 });
 

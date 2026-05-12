@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { EvaluationRun } from "@/lib/schemas";
+import type { JobCvMatrixRow } from "@/lib/embeddings";
+import { bestEmbeddingFromMatches } from "@/lib/analytics";
 
 /** Mirrors newestUsableLlmRunByJob in analytics.ts (not exported). */
 function newestUsableLlmRunByJob(runs: EvaluationRun[]): Map<string, EvaluationRun> {
@@ -109,5 +111,52 @@ describe("newestUsableLlmRunByJob (analytics behavior)", () => {
     } satisfies EvaluationRun;
     const map = newestUsableLlmRunByJob([older, newer]);
     expect(map.get(job)?.id).toBe(newer.id);
+  });
+});
+
+describe("bestEmbeddingFromMatches (dashboard overlap column)", () => {
+  it("returns null when every matrix match is skipped (UI shows —)", () => {
+    const row: JobCvMatrixRow = {
+      jobDescriptionId: "aaaaaaaa-bbbb-4ccc-dddd-eeeeeeeeeeee",
+      jobTitle: "Engineer",
+      matches: [
+        {
+          cvId: "22222222-2222-4222-8222-222222222222",
+          cvOriginalName: "a.pdf",
+          scorePercent: 0,
+          cosineSimilarity: 0,
+          skipped: true,
+          skipReason: "embedding_missing",
+        },
+      ],
+    };
+    expect(bestEmbeddingFromMatches(row)).toBeNull();
+  });
+
+  it("returns the first non-skipped match after ranking", () => {
+    const row: JobCvMatrixRow = {
+      jobDescriptionId: "aaaaaaaa-bbbb-4ccc-dddd-eeeeeeeeeeee",
+      jobTitle: "Engineer",
+      matches: [
+        {
+          cvId: "skip",
+          cvOriginalName: "old.pdf",
+          scorePercent: 99,
+          cosineSimilarity: 0.9,
+          skipped: true,
+          skipReason: "embedding_missing",
+        },
+        {
+          cvId: "ok",
+          cvOriginalName: "b.pdf",
+          scorePercent: 72,
+          cosineSimilarity: 0.4,
+          skipped: false,
+        },
+      ],
+    };
+    const best = bestEmbeddingFromMatches(row);
+    expect(best?.cvId).toBe("ok");
+    expect(best?.scorePercent).toBe(72);
   });
 });

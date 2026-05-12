@@ -755,6 +755,50 @@ export async function rankCvsAgainstJob(
   return { matches, cvTextById };
 }
 
+/** Subset of on-disk job index fields used by {@link selectJobVectorForCvMatrix}. */
+export type JobEmbIndexEntryForMatrix = {
+  fingerprint: string;
+  values: number[];
+  queryFingerprint?: string;
+  queryValues?: number[];
+};
+
+/**
+ * Picks the job-side vector used against CV document embeddings in {@link buildJobCvMatrix}.
+ * Pure logic — covered by tests so cached analytics never regresses to all-"—" rows
+ * when legacy indexes omit `queryFingerprint` or JD text drifts slightly.
+ */
+export function selectJobVectorForCvMatrix(
+  ent: JobEmbIndexEntryForMatrix | undefined,
+  textFingerprint: string,
+  ensureEmbeddings: boolean,
+): {
+  vector: number[] | undefined;
+  enqueueBedrockQueryEmbed: boolean;
+} {
+  if (
+    ent?.queryValues?.length &&
+    (ent.queryFingerprint == null ||
+      ent.queryFingerprint === "" ||
+      ent.queryFingerprint === textFingerprint)
+  ) {
+    return { vector: ent.queryValues, enqueueBedrockQueryEmbed: false };
+  }
+  if (ent?.values?.length && ent.fingerprint === textFingerprint) {
+    return { vector: ent.values, enqueueBedrockQueryEmbed: false };
+  }
+  if (ensureEmbeddings) {
+    return { vector: undefined, enqueueBedrockQueryEmbed: true };
+  }
+  if (ent?.queryValues?.length) {
+    return { vector: ent.queryValues, enqueueBedrockQueryEmbed: false };
+  }
+  if (ent?.values?.length) {
+    return { vector: ent.values, enqueueBedrockQueryEmbed: false };
+  }
+  return { vector: undefined, enqueueBedrockQueryEmbed: false };
+}
+
 export type JobCvMatrixRow = {
   jobDescriptionId: string;
   jobTitle: string;
@@ -767,13 +811,13 @@ export type BuildJobCvMatrixOptions = {
    * Bedrock for any job still missing a cached `RETRIEVAL_QUERY` vector. Use for
    * bulk LLM evaluate / explicit index rebuild flows.
    *
- * When `false` (default), reads on-disk indices only. Uses a cached job
- * `RETRIEVAL_QUERY` vector when its fingerprint matches the current JD text, or
- * when `queryFingerprint` is absent (legacy indexes). Then uses the job document
- * vector when its text fingerprint matches. If fingerprints disagree (edited JD),
- * still uses the best available cached vector so the dashboard stays useful
- * (scores may be slightly stale). Only omits a vector when the index has nothing
- * for that job — then matches are skipped without calling Bedrock.
+   * When `false` (default), reads on-disk indices only. Uses a cached job
+   * `RETRIEVAL_QUERY` vector when its fingerprint matches the current JD text, or
+   * when `queryFingerprint` is absent (legacy indexes). Then uses the job document
+   * vector when its text fingerprint matches. If fingerprints disagree (edited JD),
+   * still uses the best available cached vector so the dashboard stays useful
+   * (scores may be slightly stale). Only omits a vector when the index has nothing
+   * for that job — then matches are skipped without calling Bedrock.
    */
   ensureEmbeddings?: boolean;
 };
@@ -813,27 +857,16 @@ export async function buildJobCvMatrix(
   for (let i = 0; i < withText.length; i++) {
     const w = withText[i]!;
     const fp = fingerprintText(w.text);
-    const ent = jobIndex.entries[w.job.id];
-
-    if (
-      ent?.queryValues?.length &&
-      (ent.queryFingerprint == null ||
-        ent.queryFingerprint === "" ||
-        ent.queryFingerprint === fp)
-    ) {
-      queryVectors[i] = ent.queryValues;
-    } else if (ent?.values?.length && ent.fingerprint === fp) {
-      queryVectors[i] = ent.values;
-    } else if (ensure) {
+    const ent = jobIndex.entries[w.job.id] as JobEmbIndexEntryForMatrix | undefined;
+    const { vector, enqueueBedrockQueryEmbed } = selectJobVectorForCvMatrix(
+      ent,
+      fp,
+      ensure,
+    );
+    if (enqueueBedrockQueryEmbed) {
       missingQuery.push({ i, id: w.job.id, text: w.text });
-    } else if (ent?.queryValues?.length) {
-      // Cached path: prefer a possibly-stale query vector over no scores at all.
-      queryVectors[i] = ent.queryValues;
-    } else if (ent?.values?.length) {
-      queryVectors[i] = ent.values;
-    } else {
-      queryVectors[i] = undefined;
     }
+    queryVectors[i] = vector;
   }
 
   if (ensure && missingQuery.length > 0) {

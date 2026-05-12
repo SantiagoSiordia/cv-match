@@ -34,7 +34,8 @@ function displayNameForCv(cv: CvStoredMeta): string {
   return cv.originalName.replace(/\.[^.]+$/, "") || cv.originalName;
 }
 
-function bestEmbeddingFromMatches(row: JobCvMatrixRow): {
+/** Used by analytics UI; exported for regression tests (empty matrix → "—" columns). */
+export function bestEmbeddingFromMatches(row: JobCvMatrixRow): {
   cvId: string;
   cvName: string;
   scorePercent: number;
