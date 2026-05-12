@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { JobStoredMeta } from "@/lib/schemas";
 import type {
@@ -12,6 +13,18 @@ import {
   JOB_SEARCH_FIELD_LABEL,
   jobMatchesSearchQuery,
 } from "@/lib/jobSearchFilter";
+
+/** UTC date + time — avoids server/client locale mismatches from `toLocaleString()`. */
+function formatUploadedAt(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso.slice(0, 16);
+  const y = d.getUTCFullYear();
+  const mo = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  const h = String(d.getUTCHours()).padStart(2, "0");
+  const min = String(d.getUTCMinutes()).padStart(2, "0");
+  return `${y}-${mo}-${day} ${h}:${min} UTC`;
+}
 
 function SearchIcon({ className }: { className?: string }) {
   return (
@@ -154,8 +167,8 @@ export function JobsClient() {
     }
   }
 
-  async function onDelete(id: string) {
-    if (!confirm("Delete this job description?")) return;
+  async function onDelete(id: string): Promise<boolean> {
+    if (!confirm("Delete this job description?")) return false;
     setError(null);
     try {
       const res = await fetch(`/api/job-descriptions/${id}`, {
@@ -164,11 +177,22 @@ export function JobsClient() {
       const json = (await res.json()) as { ok: true } | ApiErrorBody;
       if (!json.ok) {
         setError(json.error.message);
-        return;
+        return false;
       }
       await load();
+      return true;
     } catch {
       setError("Delete failed");
+      return false;
+    }
+  }
+
+  async function deleteFromPreviewModal() {
+    if (!previewId) return;
+    const ok = await onDelete(previewId);
+    if (ok) {
+      setPreviewId(null);
+      setPreviewText(null);
     }
   }
 
@@ -208,7 +232,7 @@ export function JobsClient() {
   }, [filteredItems.length, items.length, jobSearchQuery]);
 
   return (
-    <div className="mx-auto max-w-5xl px-4 py-8">
+    <div className="mx-auto w-full min-w-0 max-w-5xl px-4 py-8">
       <div className="mb-8">
         <h1 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
           Job descriptions
@@ -218,6 +242,18 @@ export function JobsClient() {
           <code className="text-xs">.csv</code> (one job per row). Bulk PDF/txt
           supported. For CSV we store every column and build text for matching.
           We infer a short title from PDF/txt when possible.
+        </p>
+        <p className="mt-4 max-w-2xl rounded-xl border border-sky-200/90 bg-sky-50/90 px-4 py-3 text-sm leading-relaxed text-sky-950 dark:border-sky-800/80 dark:bg-sky-950/35 dark:text-sky-100">
+          Need a report for{" "}
+          <span className="font-medium">every role</span> at once — best text
+          matches, AI scores where you have run reviews, and a CSV export? Open{" "}
+          <Link
+            href="/analytics"
+            className="font-semibold text-sky-800 underline decoration-sky-400/80 underline-offset-2 hover:text-sky-950 dark:text-sky-200 dark:hover:text-white"
+          >
+            Analytics
+          </Link>
+          .
         </p>
       </div>
 
@@ -301,7 +337,27 @@ export function JobsClient() {
 
       <div className="mt-10">
         {loading ? (
-          <p className="text-sm text-zinc-500">Loading…</p>
+          <div
+            className="w-full space-y-3"
+            aria-busy="true"
+            aria-label="Loading job descriptions"
+          >
+            <div className="mb-2 h-3 w-44 max-w-full animate-pulse rounded bg-zinc-200 dark:bg-zinc-700" />
+            <div className="relative mb-4">
+              <div className="h-10 w-full animate-pulse rounded-xl bg-zinc-200 dark:bg-zinc-700" />
+            </div>
+            {Array.from({ length: 6 }, (_, i) => (
+              <div
+                key={i}
+                className="rounded-xl border border-zinc-100 bg-zinc-50/60 p-2.5 dark:border-zinc-800/80 dark:bg-zinc-900/40"
+              >
+                <div className="space-y-2 pt-0.5">
+                  <div className="h-4 w-full max-w-2xl animate-pulse rounded bg-zinc-200 dark:bg-zinc-700" />
+                  <div className="h-3 w-full max-w-lg animate-pulse rounded bg-zinc-100 dark:bg-zinc-800" />
+                </div>
+              </div>
+            ))}
+          </div>
         ) : items.length === 0 ? (
           <p className="rounded-xl border border-zinc-200 bg-white px-4 py-8 text-center text-sm text-zinc-600 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400">
             No job descriptions yet. Upload or paste one above.
@@ -334,57 +390,51 @@ export function JobsClient() {
                 search to see all.
               </p>
             ) : (
-          <ul className="space-y-3">
-            {filteredItems.map((job) => (
-              <li
-                key={job.id}
-                className="flex flex-col gap-3 rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-950 sm:flex-row sm:items-start sm:justify-between"
-              >
-                <div className="min-w-0 flex-1">
-                  <p className="truncate font-medium text-zinc-900 dark:text-zinc-50">
-                    {job.titleGuess ?? job.originalName}
-                  </p>
-                  <p className="truncate text-xs text-zinc-500">
-                    {job.originalName} · {job.mimeType} ·{" "}
-                    {new Date(job.uploadedAt).toLocaleString()}
-                  </p>
-                  {job.lowTextWarning ? (
-                    <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
-                      Low extracted text — check the source file.
-                    </p>
-                  ) : null}
-                  {job.extractedError ? (
-                    <p className="mt-2 text-xs text-red-700 dark:text-red-300">
-                      AI title: {job.extractedError}
-                    </p>
-                  ) : null}
-                </div>
-                <div className="flex shrink-0 flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void openPreview(job.id)}
-                    className="rounded-lg border border-zinc-200 px-3 py-1.5 text-sm font-medium text-zinc-800 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-100 dark:hover:bg-zinc-900"
-                  >
-                    Preview text
-                  </button>
-                  <a
-                    href={`/api/job-descriptions/${job.id}/file`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="rounded-lg border border-zinc-200 px-3 py-1.5 text-sm font-medium text-zinc-800 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-100 dark:hover:bg-zinc-900"
-                  >
-                    Open file
-                  </a>
-                  <button
-                    type="button"
-                    onClick={() => void onDelete(job.id)}
-                    className="rounded-lg border border-red-200 px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-300 dark:hover:bg-red-950/40"
-                  >
-                    Delete
-                  </button>
-                </div>
-              </li>
-            ))}
+          <ul className="space-y-2">
+            {filteredItems.map((job) => {
+              const headline = job.titleGuess ?? job.originalName;
+              return (
+                <li
+                  key={job.id}
+                  className="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950"
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-stretch">
+                    <button
+                      type="button"
+                      onClick={() => void openPreview(job.id)}
+                      className="min-w-0 flex-1 p-2.5 text-left transition-colors hover:bg-zinc-50/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-400 dark:hover:bg-zinc-900/50 dark:focus-visible:outline-zinc-500"
+                      aria-label={`Open extracted text preview for ${headline}`}
+                    >
+                      <p className="truncate text-sm font-semibold leading-tight text-zinc-900 dark:text-zinc-50">
+                        {headline}
+                      </p>
+                      <p className="mt-0.5 truncate text-[11px] text-zinc-500 dark:text-zinc-500">
+                        {job.originalName} · {job.mimeType} ·{" "}
+                        {formatUploadedAt(job.uploadedAt)}
+                      </p>
+                      {job.lowTextWarning ? (
+                        <p className="mt-1 text-[11px] text-amber-700 dark:text-amber-300">
+                          Low extracted text
+                        </p>
+                      ) : null}
+                      {job.extractedError ? (
+                        <p className="mt-1 line-clamp-2 text-[11px] text-red-700 dark:text-red-300">
+                          AI title: {job.extractedError}
+                        </p>
+                      ) : null}
+                    </button>
+                    <div className="flex shrink-0 items-center border-t border-zinc-100 px-2 py-2 sm:border-l sm:border-t-0 dark:border-zinc-800">
+                      <Link
+                        href={`/job-descriptions/${job.id}`}
+                        className="inline-flex w-full items-center justify-center rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs font-semibold text-zinc-800 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800 sm:w-auto sm:py-1.5"
+                      >
+                        Compare profiles
+                      </Link>
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
           </ul>
             )}
           </>
@@ -398,6 +448,37 @@ export function JobsClient() {
           setPreviewId(null);
           setPreviewText(null);
         }}
+        footer={
+          previewId ? (
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <a
+                href={`/api/job-descriptions/${previewId}/file`}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center justify-center rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-800 shadow-sm transition-colors hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
+              >
+                Open file
+              </a>
+              <Link
+                href={`/job-descriptions/${previewId}`}
+                className="inline-flex items-center justify-center rounded-lg bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-teal-800 dark:bg-teal-600 dark:hover:bg-teal-500"
+                onClick={() => {
+                  setPreviewId(null);
+                  setPreviewText(null);
+                }}
+              >
+                Compare profiles
+              </Link>
+              <button
+                type="button"
+                onClick={() => void deleteFromPreviewModal()}
+                className="inline-flex items-center justify-center rounded-lg border border-red-200/90 bg-white px-3 py-1.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-50 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300 dark:hover:bg-red-950/50"
+              >
+                Delete
+              </button>
+            </div>
+          ) : null
+        }
       >
         {previewText === null ? (
           <p className="text-sm text-zinc-500">Loading preview…</p>

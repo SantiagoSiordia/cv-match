@@ -1,0 +1,8 @@
+# Optional: Markdown → PDF for job comparison reports (md2pdf-mermaid)
+#
+#   pip install -r requirements-md2pdf.txt
+#   playwright install chromium
+#
+# The Next.js API route spawns the `md2pdf` CLI (see src/lib/md2pdfMermaid.ts).
+
+md2pdf-mermaid>=1.4.0

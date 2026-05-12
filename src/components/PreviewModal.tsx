@@ -7,6 +7,8 @@ type PreviewModalProps = {
   children: React.ReactNode;
   /** Wider modal (e.g. PDF preview). */
   wide?: boolean;
+  /** Sticky footer below scrollable body (e.g. actions). */
+  footer?: React.ReactNode;
 };
 
 export function PreviewModal({
@@ -15,6 +17,7 @@ export function PreviewModal({
   onClose,
   children,
   wide = false,
+  footer,
 }: PreviewModalProps) {
   if (!open) return null;
   return (
@@ -42,12 +45,31 @@ export function PreviewModal({
           <button
             type="button"
             onClick={onClose}
-            className="shrink-0 rounded-lg border border-zinc-200 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-900"
+            aria-label="Close"
+            className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-400 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100 dark:focus-visible:outline-zinc-500"
           >
-            Close
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="size-5"
+              aria-hidden
+            >
+              <path d="M18 6 6 18" />
+              <path d="m6 6 12 12" />
+            </svg>
           </button>
         </div>
         <div className="min-h-0 flex-1 overflow-auto p-4">{children}</div>
+        {footer != null ? (
+          <div className="shrink-0 border-t border-zinc-200 px-4 py-3 dark:border-zinc-800">
+            {footer}
+          </div>
+        ) : null}
       </div>
     </div>
   );

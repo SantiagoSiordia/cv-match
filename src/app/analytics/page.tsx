@@ -1,7 +1,9 @@
 import { AnalyticsClient } from "./AnalyticsClient";
 
+export const dynamic = "force-dynamic";
+
 export const metadata = {
-  title: "Pipeline overview",
+  title: "Analytics",
 };
 
 export default function AnalyticsPage() {

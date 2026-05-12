@@ -4,11 +4,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type { AnalyticsOverview } from "@/lib/analytics";
 import type { ApiErrorBody } from "@/components/ApiTypes";
+import type { TextOverlapBand } from "@/lib/textOverlapBands";
 import { EvaluateJobModal } from "@/components/EvaluateJobModal";
 import { PreviewModal } from "@/components/PreviewModal";
 
 /** Stable min width so table columns don’t jump between loading and loaded. */
-const JOBS_TABLE_MIN_WIDTH = "62rem";
+const JOBS_TABLE_MIN_WIDTH = "64rem";
 
 /** Skills column: show this many tags inline; rest collapse (full list on hover / SR label). */
 const SKILLS_PREVIEW_COUNT = 6;
@@ -16,30 +17,8 @@ const SKILLS_PREVIEW_COUNT = 6;
 /** Fixed server-side-style bar for text overlap counts (UI control removed). */
 const DEFAULT_EMBEDDING_THRESHOLD_PERCENT = 55;
 
-function clampLlmScore(n: number): number {
-  if (!Number.isFinite(n)) return 0;
-  return Math.min(100, Math.max(0, Math.round(n)));
-}
-
-function ChevronRightIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      xmlns="http://www.w3.org/2000/svg"
-      fill="none"
-      viewBox="0 0 24 24"
-      strokeWidth={2}
-      stroke="currentColor"
-      aria-hidden
-    >
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="m8.25 4.5 7.5 7.5-7.5 7.5"
-      />
-    </svg>
-  );
-}
+/** Minimum AI fit score for analytics (fixed; overview API query param). */
+const DEFAULT_LLM_THRESHOLD = 75;
 
 function DownloadCsvIcon({ className }: { className?: string }) {
   return (
@@ -61,6 +40,100 @@ function DownloadCsvIcon({ className }: { className?: string }) {
   );
 }
 
+/** Outline document with folded corner (PDF export row). */
+function DocumentPdfIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      strokeWidth={1.75}
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <polyline points="14 2 14 8 20 8" />
+    </svg>
+  );
+}
+
+/** Grid / table (CSV export row). */
+function TableCsvIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      strokeWidth={1.75}
+      stroke="currentColor"
+      aria-hidden
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M3.375 19.5h17.25m-17.25 0a1.125 1.125 0 0 1-1.125-1.125V5.625m18.75 12.75a1.125 1.125 0 0 1-1.125 1.125m-16.5 0V5.625m0 0A1.125 1.125 0 0 1 5.25 4.5h13.5a1.125 1.125 0 0 1 1.125 1.125m-15.75 0v.243a48.72 48.72 0 0 0 5.25-.243m-5.25 0v-.243c0-.621.504-1.125 1.125-1.125h11.25c.621 0 1.125.504 1.125 1.125v.243M7.5 9.75h9m-9 3h9m-9 3h9m-9 3h9"
+      />
+    </svg>
+  );
+}
+
+function safePdfFilenameBase(title: string): string {
+  const base = title
+    .replace(/\.[^.]+$/g, "")
+    .replace(/[^\w.-]+/g, "_")
+    .replace(/_+/g, "_")
+    .slice(0, 80)
+    .trim();
+  return base.length ? base : "analytics-report";
+}
+
+function PdfDownloadSpinner({ className }: { className?: string }) {
+  return (
+    <svg
+      className={`animate-spin motion-reduce:animate-none ${className ?? "size-4"}`}
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      aria-hidden
+    >
+      <circle
+        className="opacity-25"
+        cx="12"
+        cy="12"
+        r="10"
+        stroke="currentColor"
+        strokeWidth="4"
+      />
+      <path
+        className="opacity-75"
+        fill="currentColor"
+        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+      />
+    </svg>
+  );
+}
+
+function textOverlapBandDisplay(band: TextOverlapBand): string {
+  return band === "weak" ? "Weak" : band === "moderate" ? "Moderate" : "Strong";
+}
+
+function textOverlapBandPillClass(band: TextOverlapBand): string {
+  const base =
+    "rounded-full px-2 py-px text-[10px] font-semibold ring-1 tabular-nums";
+  switch (band) {
+    case "weak":
+      return `${base} bg-zinc-500/12 text-zinc-700 ring-zinc-500/20 dark:bg-zinc-500/20 dark:text-zinc-200 dark:ring-zinc-400/25`;
+    case "moderate":
+      return `${base} bg-sky-500/15 text-sky-900 ring-sky-600/20 dark:bg-sky-400/15 dark:text-sky-100 dark:ring-sky-400/25`;
+    case "strong":
+      return `${base} bg-emerald-500/15 text-emerald-900 ring-emerald-600/20 dark:bg-emerald-400/15 dark:text-emerald-100 dark:ring-emerald-400/25`;
+  }
+}
+
 function initialCvIdsForJobRow(
   row: AnalyticsOverview["jobRows"][number],
 ): string[] | undefined {
@@ -69,45 +142,6 @@ function initialCvIdsForJobRow(
   }
   if (row.bestEmbedding) return [row.bestEmbedding.cvId];
   return undefined;
-}
-
-function escapeCsvCell(s: string): string {
-  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-  return s;
-}
-
-function buildJobRowsCsv(overview: AnalyticsOverview): string {
-  const headers = [
-    "job_id",
-    "job_title",
-    "best_embed_cv_id",
-    "best_embed_score",
-    "top_match_skills",
-    "best_llm_cv_id",
-    "best_llm_score",
-    "llm_run_id",
-    "top3_embed",
-  ];
-  const lines = [headers.join(",")];
-  for (const row of overview.jobRows) {
-    const top3 = row.top3Embedding
-      .map((t) => `${t.cvName}:${t.scorePercent}`)
-      .join(" | ");
-    lines.push(
-      [
-        row.jobDescriptionId,
-        escapeCsvCell(row.jobTitle),
-        row.bestEmbedding?.cvId ?? "",
-        row.bestEmbedding != null ? String(row.bestEmbedding.scorePercent) : "",
-        escapeCsvCell(row.topMatchSkills.join("; ")),
-        row.bestLlm?.cvId ?? "",
-        row.bestLlm != null ? String(row.bestLlm.overallScore) : "",
-        row.bestLlm?.runId ?? "",
-        escapeCsvCell(top3),
-      ].join(","),
-    );
-  }
-  return lines.join("\n");
 }
 
 function StatCardSkeleton() {
@@ -123,12 +157,10 @@ function StatCardSkeleton() {
 function JobsTableSkeleton() {
   return (
     <div className="mt-3 overflow-hidden rounded-2xl border border-zinc-200/90 bg-white shadow-[0_2px_8px_-2px_rgba(15,23,42,0.06)] dark:border-zinc-800 dark:bg-zinc-950 dark:shadow-[0_2px_12px_-4px_rgba(0,0,0,0.35)]">
-      <div className="flex animate-pulse flex-wrap items-center justify-between gap-3 border-b border-zinc-100 bg-gradient-to-b from-zinc-50/90 to-white px-5 py-4 dark:border-zinc-800 dark:from-zinc-900/40 dark:to-zinc-950">
-        <div className="h-5 w-52 rounded-md bg-zinc-200 dark:bg-zinc-700" />
-        <div className="flex items-center gap-2">
-          <div className="h-8 w-16 rounded-full bg-zinc-200 dark:bg-zinc-700" />
-          <div className="size-9 shrink-0 rounded-xl bg-zinc-200 dark:bg-zinc-700" />
-        </div>
+      <div className="flex animate-pulse flex-nowrap items-center gap-3 border-b border-zinc-100 bg-gradient-to-b from-zinc-50/90 to-white px-5 py-4 dark:border-zinc-800 dark:from-zinc-900/40 dark:to-zinc-950">
+        <div className="h-5 w-52 shrink-0 rounded-md bg-zinc-200 dark:bg-zinc-700" />
+        <div className="h-9 min-w-0 flex-1 rounded-xl bg-zinc-200 dark:bg-zinc-700" />
+        <div className="size-10 shrink-0 rounded-xl bg-zinc-200 dark:bg-zinc-700" />
       </div>
       <div className="overflow-x-auto">
         <table
@@ -138,8 +170,8 @@ function JobsTableSkeleton() {
           <thead className="border-b border-zinc-200/90 bg-zinc-50/90 text-xs font-medium text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-400">
             <tr>
               <th className="w-[16%] px-5 py-3.5">Role</th>
-              <th className="w-[10%] px-5 py-3.5">Text overlap</th>
-              <th className="w-[20%] px-5 py-3.5">Skills</th>
+              <th className="w-[12%] px-5 py-3.5">Text overlap</th>
+              <th className="w-[18%] px-5 py-3.5">Skills</th>
               <th className="w-[28%] px-5 py-3.5">Top résumés</th>
               <th className="w-[14%] px-5 py-3.5">AI fit</th>
               <th className="w-[12%] px-5 py-3.5 text-right">Review</th>
@@ -189,6 +221,29 @@ function JobsTableSkeleton() {
   );
 }
 
+/**
+ * Renders a stable placeholder on the server and on the client’s first paint, then
+ * swaps in the detailed skeleton after mount so SSR and hydration always match.
+ */
+function JobsTableSkeletonGate() {
+  const [showDetail, setShowDetail] = useState(false);
+  useEffect(() => {
+    setShowDetail(true);
+  }, []);
+  if (!showDetail) {
+    return (
+      <div
+        className="mt-3 overflow-hidden rounded-2xl border border-zinc-200/90 bg-white shadow-[0_2px_8px_-2px_rgba(15,23,42,0.06)] dark:border-zinc-800 dark:bg-zinc-950 dark:shadow-[0_2px_12px_-4px_rgba(0,0,0,0.35)]"
+        aria-busy="true"
+        aria-label="Loading roles table"
+      >
+        <div className="h-[min(70vh,36rem)] min-h-[12rem] animate-pulse bg-gradient-to-b from-zinc-50 to-zinc-100 dark:from-zinc-900/40 dark:to-zinc-950" />
+      </div>
+    );
+  }
+  return <JobsTableSkeleton />;
+}
+
 function TrainingTableSkeleton() {
   return (
     <div className="mt-3 overflow-x-auto rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
@@ -228,7 +283,6 @@ function TrainingTableSkeleton() {
 }
 
 export function AnalyticsClient() {
-  const [llmThreshold, setLlmThreshold] = useState(75);
   const [overview, setOverview] = useState<AnalyticsOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -237,47 +291,44 @@ export function AnalyticsClient() {
     title: string;
   } | null>(null);
   const [jobsTableFilter, setJobsTableFilter] = useState("");
-  /** Debounced LLM threshold only (embedding bar is fixed). */
-  const [debouncedLlm, setDebouncedLlm] = useState(llmThreshold);
-
-  useEffect(() => {
-    const t = setTimeout(() => setDebouncedLlm(llmThreshold), 400);
-    return () => clearTimeout(t);
-  }, [llmThreshold]);
 
   const [evaluateModal, setEvaluateModal] = useState<{
     jobId: string;
     jobTitle: string;
     initialCvIds?: string[];
   } | null>(null);
+  const [skillsModal, setSkillsModal] = useState<{
+    jobTitle: string;
+    skills: string[];
+  } | null>(null);
+  const [pdfDownloadLoading, setPdfDownloadLoading] = useState(false);
+  const [pdfDownloadError, setPdfDownloadError] = useState<string | null>(null);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
 
   const loadAbortRef = useRef<AbortController | null>(null);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
 
-  const load = useCallback(async (immediateLlmThreshold?: number) => {
+  const load = useCallback(async () => {
     loadAbortRef.current?.abort();
     const ac = new AbortController();
     loadAbortRef.current = ac;
-
-    const llmArg =
-      immediateLlmThreshold !== undefined
-        ? clampLlmScore(immediateLlmThreshold)
-        : debouncedLlm;
 
     setLoading(true);
     setError(null);
     try {
       const q = new URLSearchParams({
         embeddingThreshold: String(DEFAULT_EMBEDDING_THRESHOLD_PERCENT),
-        llmThreshold: String(llmArg),
+        llmThreshold: String(DEFAULT_LLM_THRESHOLD),
       });
       const res = await fetch(`/api/analytics/overview?${q}`, {
         cache: "no-store",
         signal: ac.signal,
       });
+      if (loadAbortRef.current !== ac) return;
       const json = (await res.json()) as
         | { ok: true; data: { overview: AnalyticsOverview } }
         | ApiErrorBody;
-      if (ac.signal.aborted) return;
+      if (loadAbortRef.current !== ac) return;
       if (!json.ok) {
         setError(json.error.message);
         setOverview(null);
@@ -291,31 +342,93 @@ export function AnalyticsClient() {
       }
       setOverview(ov);
     } catch (e) {
+      if (loadAbortRef.current !== ac) return;
       if (e instanceof Error && e.name === "AbortError") return;
       setError("Could not load analytics");
       setOverview(null);
     } finally {
-      if (!ac.signal.aborted) {
+      if (loadAbortRef.current === ac) {
         setLoading(false);
       }
     }
-  }, [debouncedLlm]);
+  }, []);
 
   useEffect(() => {
     void load();
+    return () => {
+      loadAbortRef.current?.abort();
+      loadAbortRef.current = null;
+    };
   }, [load]);
 
-  const csvBlobUrl = useMemo(() => {
-    if (!overview) return null;
-    const csv = buildJobRowsCsv(overview);
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-    return URL.createObjectURL(blob);
-  }, [overview]);
+  async function downloadAnalyticsPdf() {
+    setPdfDownloadError(null);
+    setPdfDownloadLoading(true);
+    const url = "/api/analytics/report";
+    try {
+      const res = await fetch(url);
+      const ct = res.headers.get("Content-Type") ?? "";
+      if (!res.ok) {
+        if (ct.includes("application/json")) {
+          const j = (await res.json()) as ApiErrorBody;
+          setPdfDownloadError(
+            j.ok === false ? j.error.message : `PDF failed (${res.status})`,
+          );
+        } else {
+          setPdfDownloadError(`PDF download failed (${res.status})`);
+        }
+        return;
+      }
+      const blob = await res.blob();
+      const cd = res.headers.get("Content-Disposition");
+      let filename = `${safePdfFilenameBase("analytics-report")}.pdf`;
+      if (cd) {
+        const m = /filename\*?=(?:UTF-8''|")?([^";\n]+)"?/i.exec(cd);
+        const raw = m?.[1]?.trim();
+        if (raw) {
+          try {
+            filename = decodeURIComponent(raw.replace(/^UTF-8''/i, ""));
+          } catch {
+            filename = raw.replace(/^UTF-8''/i, "");
+          }
+        }
+      }
+      const href = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = href;
+      a.download = filename;
+      a.rel = "noopener";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(href);
+    } catch {
+      setPdfDownloadError(
+        "Could not download PDF. Check your connection and try again.",
+      );
+    } finally {
+      setPdfDownloadLoading(false);
+    }
+  }
 
   useEffect(() => {
-    if (!csvBlobUrl) return;
-    return () => URL.revokeObjectURL(csvBlobUrl);
-  }, [csvBlobUrl]);
+    if (!exportMenuOpen) return;
+    function onPointerDown(e: MouseEvent) {
+      const el = exportMenuRef.current;
+      if (el && !el.contains(e.target as Node)) {
+        setExportMenuOpen(false);
+      }
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setExportMenuOpen(false);
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [exportMenuOpen]);
 
   const initialLoad = loading && !overview;
   const refreshing = loading && !!overview;
@@ -352,13 +465,8 @@ export function AnalyticsClient() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <h1 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-            Pipeline overview
+            Analytics
           </h1>
-          <p className="mt-2 max-w-3xl text-sm text-zinc-600 dark:text-zinc-400">
-            See which roles have strong résumé matches, open PDFs in one click,
-            and jump to a saved AI comparison when one exists—or start a review
-            when it does not.
-          </p>
         </div>
         {refreshing ? (
           <div
@@ -375,108 +483,24 @@ export function AnalyticsClient() {
         ) : null}
       </div>
 
-      <div className="mt-6 rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-        <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between lg:gap-8">
-            <div className="min-w-0 flex-1">
-              <h2 className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-                AI fit score threshold
-              </h2>
-              <p className="mt-1.5 max-w-xl text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
-                Roles at or above this score count toward “Strong AI reviews”
-                and related summaries. Adjustments apply after a short pause,
-                then data reloads automatically.
-              </p>
-            </div>
-
-            <div className="w-full shrink-0 space-y-4 lg:max-w-md">
-              <div>
-                <div className="flex items-baseline justify-between gap-2">
-                  <label
-                    htmlFor="analytics-llm-threshold"
-                    className="text-xs font-medium text-zinc-600 dark:text-zinc-400"
-                  >
-                    Minimum score
-                  </label>
-                  <span className="tabular-nums text-xs text-zinc-500 dark:text-zinc-500">
-                    0–100
-                  </span>
-                </div>
-                <div className="mt-2 flex flex-col gap-3 sm:flex-row sm:items-center">
-                  <input
-                    id="analytics-llm-threshold"
-                    type="range"
-                    min={0}
-                    max={100}
-                    step={1}
-                    value={llmThreshold}
-                    onChange={(e) =>
-                      setLlmThreshold(clampLlmScore(Number(e.target.value)))
-                    }
-                    className="h-2 w-full cursor-pointer accent-blue-600 sm:flex-1 dark:accent-blue-500"
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-valuenow={llmThreshold}
-                  />
-                  <div className="flex shrink-0 items-center gap-1.5 sm:justify-end">
-                    <input
-                      type="number"
-                      min={0}
-                      max={100}
-                      inputMode="numeric"
-                      value={llmThreshold}
-                      onChange={(e) => {
-                        const v = e.target.valueAsNumber;
-                        if (Number.isNaN(v)) return;
-                        setLlmThreshold(clampLlmScore(v));
-                      }}
-                      className="w-16 rounded-lg border border-zinc-200 bg-zinc-50 px-2 py-1.5 text-center text-sm font-medium tabular-nums text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900/60 dark:text-zinc-100"
-                      aria-label="AI fit score threshold value"
-                    />
-                    <span className="text-sm tabular-nums text-zinc-500 dark:text-zinc-500">
-                      / 100
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex flex-col gap-2 border-t border-zinc-100 pt-4 dark:border-zinc-800 sm:flex-row sm:items-center sm:justify-between">
-                <button
-                  type="button"
-                  disabled={loading}
-                  onClick={() => void load(llmThreshold)}
-                  title="Fetch the latest summary and jobs table using the score above (no need to wait for auto-refresh)."
-                  className="inline-flex items-center justify-center rounded-lg bg-zinc-900 px-3 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
-                >
-                  Refresh data
-                </button>
-                <details className="group rounded-lg border border-zinc-200 bg-zinc-50/80 text-sm dark:border-zinc-700 dark:bg-zinc-900/40">
-                  <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 font-medium text-zinc-800 dark:text-zinc-200 [&::-webkit-details-marker]:hidden">
-                    <ChevronRightIcon className="size-4 shrink-0 text-zinc-400 transition-transform duration-200 group-open:rotate-90" />
-                    How thresholds work
-                  </summary>
-                  <p className="border-t border-zinc-200 px-3 py-2.5 text-xs leading-relaxed text-zinc-600 dark:border-zinc-700 dark:text-zinc-400">
-                    The AI fit score bar controls which roles count in “Strong AI
-                    reviews” and related lists. Changing it waits briefly, then
-                    refreshes automatically. Text overlap counts use a fixed bar
-                    on the server ({DEFAULT_EMBEDDING_THRESHOLD_PERCENT}%).
-                  </p>
-                </details>
-              </div>
-            </div>
-          </div>
-      </div>
-
       {error ? (
-        <p className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
-          {error}
-        </p>
+        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
+          <p>{error}</p>
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="mt-3 inline-flex rounded-lg bg-red-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-800 dark:bg-red-200 dark:text-red-950 dark:hover:bg-white"
+          >
+            Retry
+          </button>
+        </div>
       ) : null}
 
       {initialLoad ? (
         <>
           <p className="mt-6 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100">
-            Loading pipeline overview. Large libraries can take a few minutes —
-            this page updates when ready.
+            Loading analytics. Large libraries can take a few minutes — this page
+            updates when ready.
           </p>
           <div
             className="mt-8 overflow-x-auto pb-0.5 md:overflow-visible"
@@ -492,7 +516,7 @@ export function AnalyticsClient() {
           </div>
           <div className="mt-2 h-4 w-full max-w-xl animate-pulse rounded bg-zinc-100 dark:bg-zinc-800" />
           <section className="mt-10">
-            <JobsTableSkeleton />
+            <JobsTableSkeletonGate />
           </section>
           <section className="mt-10">
             <div className="h-6 w-64 animate-pulse rounded bg-zinc-200 dark:bg-zinc-700" />
@@ -539,21 +563,49 @@ export function AnalyticsClient() {
             </div>
           </div>
 
+          <section
+            className="mt-8 rounded-xl border border-zinc-200/90 bg-zinc-50/80 px-4 py-3.5 text-sm leading-relaxed text-zinc-800 shadow-sm dark:border-zinc-800 dark:bg-zinc-900/45 dark:text-zinc-200"
+            aria-labelledby="analytics-overlap-help-heading"
+          >
+            <h3
+              id="analytics-overlap-help-heading"
+              className="text-sm font-semibold text-zinc-900 dark:text-zinc-50"
+            >
+              How to read text overlap
+            </h3>
+            <p className="mt-2">
+              <strong className="font-medium">Text overlap</strong> is embedding
+              similarity between the role text and a résumé — useful for shortlisting,
+              not the same as an AI hire-fit score. The percentage is unchanged for
+              sorting and thresholds;{" "}
+              <strong className="font-medium">Weak / Moderate / Strong</strong> bands
+              describe the underlying cosine strength so similar-looking percentages are
+              easier to compare.
+            </p>
+          </section>
+
           <section className="mt-10">
             <div className="relative overflow-hidden rounded-2xl border border-zinc-200/90 bg-white shadow-[0_2px_8px_-2px_rgba(15,23,42,0.06)] dark:border-zinc-800 dark:bg-zinc-950 dark:shadow-[0_2px_12px_-4px_rgba(0,0,0,0.35)]">
               {refreshing ? (
                 <div
-                  className="pointer-events-none absolute inset-0 z-[1] bg-white/55 backdrop-blur-[1px] dark:bg-zinc-950/55"
+                  className="pointer-events-none absolute inset-0 z-20 bg-white/55 backdrop-blur-[1px] dark:bg-zinc-950/55"
                   aria-hidden
                 />
               ) : null}
-              <div className="relative z-0 flex flex-col gap-3 border-b border-zinc-100 bg-gradient-to-b from-zinc-50/90 to-white px-5 py-4 dark:border-zinc-800 dark:from-zinc-900/40 dark:to-zinc-950 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-x-4 sm:gap-y-2">
-                <div className="min-w-0 flex-1">
-                  <h2 className="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-                    Roles and strongest matches
+              <div className="relative z-10 flex flex-nowrap items-center gap-3 border-b border-zinc-100 bg-gradient-to-b from-zinc-50/90 to-white px-5 py-3 isolate sm:gap-4 sm:py-3.5 dark:border-zinc-800 dark:from-zinc-900/40 dark:to-zinc-950">
+                <div className="min-w-0 max-w-[min(100%,22rem)] shrink sm:max-w-[min(100%,28rem)]">
+                  <h2 className="flex min-w-0 items-baseline gap-x-2 text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+                    <span className="min-w-0 truncate">
+                      Roles and strongest matches
+                    </span>
+                    <span className="shrink-0 text-sm font-normal tabular-nums text-zinc-500 dark:text-zinc-400">
+                      {jobsTableFilter.trim()
+                        ? `${filteredJobRows.length} / ${overview.jobRows.length}`
+                        : `${overview.jobRows.length} role${overview.jobRows.length === 1 ? "" : "s"}`}
+                    </span>
                   </h2>
                 </div>
-                <div className="flex w-full min-w-0 flex-col gap-2 sm:max-w-xs lg:max-w-md">
+                <div className="min-w-0 flex-1">
                   <label className="sr-only" htmlFor="analytics-jobs-filter">
                     Filter jobs and candidates
                   </label>
@@ -564,26 +616,95 @@ export function AnalyticsClient() {
                     placeholder="Search role or candidate…"
                     value={jobsTableFilter}
                     onChange={(e) => setJobsTableFilter(e.target.value)}
-                    className="w-full min-w-0 rounded-xl border-0 bg-zinc-100/90 px-3.5 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 ring-1 ring-zinc-200/90 transition-shadow focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/25 dark:bg-zinc-900/80 dark:text-zinc-50 dark:placeholder:text-zinc-500 dark:ring-zinc-700 dark:focus:bg-zinc-950 dark:focus:ring-blue-400/25"
+                    className="w-full min-w-0 max-w-xl rounded-xl border-0 bg-zinc-100/90 px-3.5 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 ring-1 ring-zinc-200/90 transition-shadow focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/25 dark:bg-zinc-900/80 dark:text-zinc-50 dark:placeholder:text-zinc-500 dark:ring-zinc-700 dark:focus:bg-zinc-950 dark:focus:ring-blue-400/25"
                   />
                 </div>
-                <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-                  <span className="rounded-full bg-zinc-100/90 px-3 py-1 text-xs font-medium tabular-nums text-zinc-700 ring-1 ring-zinc-200/80 dark:bg-zinc-800/80 dark:text-zinc-200 dark:ring-zinc-700">
-                    {jobsTableFilter.trim()
-                      ? `${filteredJobRows.length} / ${overview.jobRows.length}`
-                      : `${overview.jobRows.length} role${overview.jobRows.length === 1 ? "" : "s"}`}
-                  </span>
-                  {csvBlobUrl ? (
-                    <a
-                      href={csvBlobUrl}
-                      download={`analytics-jobs-${overview.generatedAt.slice(0, 10)}.csv`}
-                      className="inline-flex size-9 shrink-0 items-center justify-center rounded-xl bg-zinc-100/90 text-zinc-700 ring-1 ring-zinc-200/90 transition-colors hover:bg-white hover:ring-zinc-300 dark:bg-zinc-800/80 dark:text-zinc-200 dark:ring-zinc-700 dark:hover:bg-zinc-700"
-                      title="Export spreadsheet (full list, not filtered)"
-                      aria-label="Export spreadsheet as CSV"
-                    >
-                      <DownloadCsvIcon className="size-[18px]" />
-                    </a>
+                <div className="relative shrink-0">
+                  {pdfDownloadError ? (
+                    <span className="sr-only" role="status">
+                      {pdfDownloadError}
+                    </span>
                   ) : null}
+                  <div ref={exportMenuRef} className="relative flex justify-end">
+                    <button
+                      type="button"
+                      id="analytics-export-trigger"
+                      aria-haspopup="menu"
+                      aria-expanded={exportMenuOpen}
+                      aria-controls="analytics-export-menu"
+                      title={
+                        pdfDownloadError && !exportMenuOpen
+                          ? `Last export error: ${pdfDownloadError.length > 180 ? `${pdfDownloadError.slice(0, 180)}…` : pdfDownloadError}`
+                          : "Exports: PDF report, Excel workbook, plain CSV"
+                      }
+                      onClick={() => setExportMenuOpen((o) => !o)}
+                      className={`inline-flex size-10 items-center justify-center rounded-xl bg-zinc-100/90 text-zinc-800 transition-colors hover:bg-white dark:bg-zinc-800/80 dark:text-zinc-100 dark:hover:bg-zinc-700 ${
+                        pdfDownloadError && !exportMenuOpen
+                          ? "ring-2 ring-red-500/75 ring-offset-2 ring-offset-white dark:ring-offset-zinc-950"
+                          : "ring-1 ring-zinc-200/90 hover:ring-zinc-300 dark:ring-zinc-700 dark:hover:ring-zinc-600"
+                      }`}
+                    >
+                      <DownloadCsvIcon
+                        className="size-[18px] shrink-0"
+                        aria-hidden
+                      />
+                      <span className="sr-only">Open export downloads</span>
+                    </button>
+                    {exportMenuOpen ? (
+                      <div
+                        id="analytics-export-menu"
+                        role="menu"
+                        aria-labelledby="analytics-export-trigger"
+                        className="absolute right-0 top-full z-[100] mt-1.5 min-w-[15rem] rounded-xl border border-zinc-200/95 bg-white py-1 shadow-lg ring-1 ring-black/5 dark:border-zinc-700 dark:bg-zinc-900 dark:ring-white/10"
+                      >
+                        {pdfDownloadError ? (
+                          <p className="mx-2 mb-1 rounded-lg border border-red-200 bg-red-50 px-2 py-1.5 text-xs text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
+                            {pdfDownloadError}
+                          </p>
+                        ) : null}
+                        <button
+                          type="button"
+                          role="menuitem"
+                          disabled={pdfDownloadLoading}
+                          aria-busy={pdfDownloadLoading}
+                          className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm font-medium text-zinc-900 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-60 dark:text-zinc-100 dark:hover:bg-zinc-800"
+                          onClick={() => void downloadAnalyticsPdf()}
+                        >
+                          <span className="flex size-[18px] shrink-0 items-center justify-center">
+                            {pdfDownloadLoading ? (
+                              <PdfDownloadSpinner className="size-4 text-teal-700 dark:text-teal-400" />
+                            ) : (
+                              <DocumentPdfIcon className="size-[18px] text-teal-700 dark:text-teal-400" />
+                            )}
+                          </span>
+                          {pdfDownloadLoading
+                            ? "Building PDF…"
+                            : "Download PDF report"}
+                        </button>
+                        <a
+                          role="menuitem"
+                          href="/api/analytics/candidates-export"
+                          className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm font-medium text-zinc-900 hover:bg-zinc-100 dark:text-zinc-100 dark:hover:bg-zinc-800"
+                          onClick={() => setExportMenuOpen(false)}
+                        >
+                          <DownloadCsvIcon
+                            className="size-[18px] shrink-0 text-emerald-700 dark:text-emerald-400"
+                            aria-hidden
+                          />
+                          Excel (.xlsx)
+                        </a>
+                        <a
+                          role="menuitem"
+                          href="/api/analytics/candidates-export?format=csv"
+                          className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm font-medium text-zinc-900 hover:bg-zinc-100 dark:text-zinc-100 dark:hover:bg-zinc-800"
+                          onClick={() => setExportMenuOpen(false)}
+                        >
+                          <TableCsvIcon className="size-[18px] shrink-0 text-sky-700 dark:text-sky-400" />
+                          Plain CSV
+                        </a>
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
               </div>
 
@@ -606,13 +727,13 @@ export function AnalyticsClient() {
                       <tr>
                         <th className="w-[16%] px-5 py-3.5">Role</th>
                         <th
-                          className="w-[10%] px-5 py-3.5"
-                          title="Text overlap vs role description (not the same as hire fit)"
+                          className="w-[12%] px-5 py-3.5"
+                          title="Embedding text overlap vs role (not hire fit). Weak / Moderate / Strong = cosine bands."
                         >
                           Text overlap
                         </th>
                         <th
-                          className="w-[20%] px-5 py-3.5"
+                          className="w-[18%] px-5 py-3.5"
                           title="Skills from metadata for the top text match"
                         >
                           Skills
@@ -659,13 +780,27 @@ export function AnalyticsClient() {
                             </td>
                             <td className="px-5 py-4 align-top">
                               {emb != null ? (
-                                <div className="flex max-w-[7rem] flex-col gap-2">
+                                <div className="flex max-w-[9rem] flex-col gap-2">
                                   <div className="flex flex-wrap items-center gap-1.5">
                                     <span
                                       className={`text-sm font-semibold tabular-nums ${atBar ? "text-emerald-700 dark:text-emerald-400" : "text-zinc-800 dark:text-zinc-200"}`}
                                     >
                                       {emb.scorePercent}%
                                     </span>
+                                    {row.textOverlapBand != null ? (
+                                      <span
+                                        className={textOverlapBandPillClass(
+                                          row.textOverlapBand,
+                                        )}
+                                        title={
+                                          row.textOverlapCosine != null
+                                            ? `Cosine similarity ${row.textOverlapCosine.toFixed(3)}`
+                                            : undefined
+                                        }
+                                      >
+                                        {textOverlapBandDisplay(row.textOverlapBand)}
+                                      </span>
+                                    ) : null}
                                     {atBar ? (
                                       <span className="rounded-full bg-emerald-500/15 px-2 py-px text-[10px] font-semibold text-emerald-800 ring-1 ring-emerald-600/20 dark:bg-emerald-400/15 dark:text-emerald-200 dark:ring-emerald-400/25">
                                         Bar
@@ -705,16 +840,23 @@ export function AnalyticsClient() {
                                     ))}
                                   {row.topMatchSkills.length >
                                   SKILLS_PREVIEW_COUNT ? (
-                                    <span
-                                      className="shrink-0 rounded-full bg-zinc-200/80 px-2.5 py-1 text-xs font-medium tabular-nums text-zinc-700 ring-1 ring-zinc-300/80 dark:bg-zinc-800 dark:text-zinc-300 dark:ring-zinc-600"
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setSkillsModal({
+                                          jobTitle: row.jobTitle,
+                                          skills: row.topMatchSkills,
+                                        })
+                                      }
+                                      className="shrink-0 cursor-pointer rounded-full bg-zinc-200/80 px-2.5 py-1 text-xs font-medium tabular-nums text-zinc-700 ring-1 ring-zinc-300/80 transition hover:bg-zinc-300/70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500 dark:bg-zinc-800 dark:text-zinc-300 dark:ring-zinc-600 dark:hover:bg-zinc-700"
                                       title={row.topMatchSkills.join(", ")}
-                                      aria-label={`Also includes ${row.topMatchSkills.length - SKILLS_PREVIEW_COUNT} more: ${row.topMatchSkills.slice(SKILLS_PREVIEW_COUNT).join(", ")}`}
+                                      aria-label={`Show all ${row.topMatchSkills.length} matching skills for ${row.jobTitle}. Also includes ${row.topMatchSkills.length - SKILLS_PREVIEW_COUNT} not shown inline: ${row.topMatchSkills.slice(SKILLS_PREVIEW_COUNT).join(", ")}`}
                                     >
                                       +
                                       {row.topMatchSkills.length -
                                         SKILLS_PREVIEW_COUNT}{" "}
                                       more
-                                    </span>
+                                    </button>
                                   ) : null}
                                 </div>
                               ) : (
@@ -896,6 +1038,28 @@ export function AnalyticsClient() {
         ) : null}
       </PreviewModal>
 
+      <PreviewModal
+        open={skillsModal !== null}
+        title={
+          skillsModal
+            ? `Matching skills — ${skillsModal.jobTitle}`
+            : "Matching skills"
+        }
+        onClose={() => setSkillsModal(null)}
+      >
+        {skillsModal ? (
+          <ul className="m-0 flex list-none flex-wrap gap-2 p-0">
+            {skillsModal.skills.map((skill, i) => (
+              <li key={`${skill}-${i}`}>
+                <span className="inline-block rounded-full bg-zinc-100/95 px-2.5 py-1 text-xs font-medium leading-none text-zinc-800 ring-1 ring-zinc-200/90 dark:bg-zinc-800/70 dark:text-zinc-200 dark:ring-zinc-600/60">
+                  {skill}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </PreviewModal>
+
       <EvaluateJobModal
         open={evaluateModal !== null}
         onClose={() => setEvaluateModal(null)}
@@ -996,6 +1160,12 @@ function ClosableEmbeddingPanel({
                   <span className="inline-flex items-center rounded-lg border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs font-medium text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
                     {j.candidatesAtOrAboveThreshold} meet bar
                   </span>
+                  <Link
+                    href={`/job-descriptions/${j.jobDescriptionId}`}
+                    className="inline-flex rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-zinc-800 shadow-sm hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
+                  >
+                    Compare
+                  </Link>
                   <button
                     type="button"
                     onClick={() => onOpenEvaluate(j)}

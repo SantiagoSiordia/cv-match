@@ -4,6 +4,16 @@ import {
   readCvEmbeddingIndexSnapshot,
   type JobCvMatrixRow,
 } from "@/lib/embeddings";
+import {
+  customerNameFromJob,
+  candidatesExportHeaders,
+  requirementBranchFromJob,
+} from "@/lib/analyticsCandidatesExportColumns";
+import {
+  type TextOverlapBand,
+  textOverlapBandFromCosine,
+  textOverlapBandCsvLabel,
+} from "@/lib/textOverlapBands";
 import { listEvaluationRuns } from "@/lib/evaluationsStore";
 import {
   listCvs,
@@ -26,6 +36,7 @@ function bestEmbeddingFromMatches(row: JobCvMatrixRow): {
   cvId: string;
   cvName: string;
   scorePercent: number;
+  cosineSimilarity: number;
 } | null {
   const ok = row.matches.filter((m) => !m.skipped);
   if (ok.length === 0) return null;
@@ -34,6 +45,7 @@ function bestEmbeddingFromMatches(row: JobCvMatrixRow): {
     cvId: top.cvId,
     cvName: top.cvOriginalName,
     scorePercent: top.scorePercent,
+    cosineSimilarity: top.cosineSimilarity,
   };
 }
 
@@ -158,6 +170,10 @@ export type AnalyticsOverview = {
     }>;
     /** LLM-extracted hard skills for the #1 embedding match (same CV as bestEmbedding). */
     topMatchSkills: string[];
+    /** Cosine for best non-skipped text-overlap match; null if none. */
+    textOverlapCosine: number | null;
+    /** Band from cosine via `textOverlapBandFromCosine`; null if no embedding match. */
+    textOverlapBand: TextOverlapBand | null;
   }>;
   trainingOpportunities: TrainingOpportunity[];
 };
@@ -322,6 +338,9 @@ export async function computeAnalyticsOverview(input: {
             (s): s is string => typeof s === "string" && s.trim().length > 0,
           )
         : [];
+    const textOverlapCosine = bestEmb?.cosineSimilarity ?? null;
+    const textOverlapBand =
+      bestEmb != null ? textOverlapBandFromCosine(bestEmb.cosineSimilarity) : null;
     return {
       jobDescriptionId: job.id,
       jobTitle: title,
@@ -342,6 +361,8 @@ export async function computeAnalyticsOverview(input: {
         : null,
       top3Embedding: top3,
       topMatchSkills,
+      textOverlapCosine,
+      textOverlapBand,
     };
   });
 
@@ -379,4 +400,80 @@ export async function computeAnalyticsOverview(input: {
     jobRows,
     trainingOpportunities: computeTrainingOpportunities(jobs, cvs),
   };
+}
+
+function escapeCsvCell(s: string): string {
+  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
+/**
+ * One row per (job × candidate résumé): raw cell values for CSV / Excel export.
+ */
+export async function buildAnalyticsCandidatesExportData(): Promise<{
+  headers: string[];
+  rows: string[][];
+  generatedAt: string;
+}> {
+  const [matrix, jobs] = await Promise.all([
+    buildJobCvMatrix(),
+    listJobDescriptions(),
+  ]);
+  const generatedAt = new Date().toISOString();
+  const jobById = new Map(jobs.map((j) => [j.id, j] as const));
+  const headers = candidatesExportHeaders();
+
+  const rows: string[][] = [];
+
+  const sortedMatrix = [...matrix].sort((a, b) => {
+    const t = a.jobTitle.localeCompare(b.jobTitle);
+    if (t !== 0) return t;
+    return a.jobDescriptionId.localeCompare(b.jobDescriptionId);
+  });
+
+  for (const row of sortedMatrix) {
+    const jobMeta = jobById.get(row.jobDescriptionId);
+    let rank = 0;
+    for (const m of row.matches) {
+      rank++;
+      const band =
+        !m.skipped ? textOverlapBandFromCosine(m.cosineSimilarity) : null;
+      const label = band != null ? textOverlapBandCsvLabel(band) : "";
+      const jobSkills = (jobMeta?.extractedSkills ?? [])
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .join("; ");
+
+      rows.push([
+        customerNameFromJob(jobMeta),
+        requirementBranchFromJob(jobMeta),
+        row.jobDescriptionId,
+        row.jobTitle,
+        jobMeta?.sourceRequirementId ?? "",
+        jobSkills,
+        String(rank),
+        m.cvOriginalName,
+        m.skipped ? "" : String(m.scorePercent),
+        label,
+      ]);
+    }
+  }
+
+  return { headers, rows, generatedAt };
+}
+
+/**
+ * One CSV row per (job × candidate résumé): full embedding rank plus CV metadata
+ * and any saved LLM compatibility row from the newest usable evaluation run for that job.
+ */
+export async function buildAnalyticsCandidatesCsvString(): Promise<{
+  csv: string;
+  generatedAt: string;
+}> {
+  const { headers, rows, generatedAt } = await buildAnalyticsCandidatesExportData();
+  const lines = [headers.map(escapeCsvCell).join(",")];
+  for (const row of rows) {
+    lines.push(row.map(escapeCsvCell).join(","));
+  }
+  return { csv: lines.join("\n"), generatedAt };
 }

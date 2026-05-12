@@ -20,6 +20,7 @@ import {
   readJobExtractedText,
 } from "@/lib/storage";
 import { withLlmThrottleRetries } from "@/lib/llmThrottleRetry";
+import type { CvStoredMeta } from "@/lib/schemas";
 import { applyTechnicalJobMatchOrdering } from "@/lib/technicalRoleRanking";
 
 export class EmbeddingApiError extends Error {
@@ -47,17 +48,27 @@ function normalizeStoredIndexModel(stored: string): string {
   return `b:${encodeURIComponent(stored)}:1024`;
 }
 
-function truncateForEmbedding(text: string): string {
+/** Same truncation as Bedrock embedding input (see `embedContentSingle`). */
+export function truncateForEmbedding(text: string): string {
   if (text.length <= MAX_EMBEDDING_CHARS) return text;
   return `${text.slice(0, MAX_EMBEDDING_CHARS)}\n\n[TRUNCATED]`;
 }
 
 /** Titan has no separate "document title" field; prepend a short title line when present. */
-function documentEmbeddingInput(text: string, title?: string): string {
+export function documentEmbeddingInput(text: string, title?: string): string {
   const t = title?.trim();
   const body = truncateForEmbedding(text);
   if (t) return `${t.slice(0, 200)}\n\n${body}`;
   return body;
+}
+
+/** Title line prepended to CV body for `RETRIEVAL_DOCUMENT` embeddings (matches `ensureCvEmbeddingIndex`). */
+export function cvTitleLineForEmbedding(cv: CvStoredMeta): string {
+  return (
+    cv.extracted?.currentPosition?.trim() ||
+    cv.originalName.replace(/\.[^.]+$/, "") ||
+    "CV"
+  );
 }
 
 export function fingerprintText(text: string): string {
@@ -425,10 +436,7 @@ export async function ensureCvEmbeddingIndex(): Promise<CvIndexFile> {
     if (existing && existing.fingerprint === fp && existing.values.length > 0) {
       continue;
     }
-    const title =
-      cv.extracted?.currentPosition?.trim() ||
-      cv.originalName.replace(/\.[^.]+$/, "") ||
-      "CV";
+    const title = cvTitleLineForEmbedding(cv);
     toEmbed.push({ id: cv.id, text, title, fingerprint: fp });
   }
 
@@ -491,13 +499,19 @@ export function compareCvMatchRowsForRanking(a: CvMatchRow, b: CvMatchRow): numb
   return a.cvId.localeCompare(b.cvId);
 }
 
+export type RankCvsAgainstJobResult = {
+  matches: CvMatchRow[];
+  /** Extracted résumé text per CV (same pass as ranking; for job role UI / technical buckets). */
+  cvTextById: Map<string, string>;
+};
+
 /**
  * Ranks all CVs against one job using cached document embeddings for CVs and the job.
  * Uses the job text as RETRIEVAL_QUERY and CV vectors as documents (mirrors {@link rankCvAgainstJobs}).
  */
 export async function rankCvsAgainstJob(
   jobDescriptionId: string,
-): Promise<CvMatchRow[]> {
+): Promise<RankCvsAgainstJobResult> {
   const jobFromMeta = await getJobMeta(jobDescriptionId);
   if (!jobFromMeta) {
     throw new Error("JOB_NOT_FOUND");
@@ -569,7 +583,7 @@ export async function rankCvsAgainstJob(
     jobFromMeta.titleGuess?.trim() ||
     jobFromMeta.originalName.replace(/\.[^.]+$/, "") ||
     "Job";
-  return applyTechnicalJobMatchOrdering(
+  const matches = applyTechnicalJobMatchOrdering(
     jobFromMeta,
     displayTitle,
     rows,
@@ -577,6 +591,7 @@ export async function rankCvsAgainstJob(
     compareCvMatchRowsForRanking,
     cvTextById,
   );
+  return { matches, cvTextById };
 }
 
 export type JobCvMatrixRow = {

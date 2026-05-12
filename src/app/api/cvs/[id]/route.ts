@@ -8,7 +8,7 @@ import {
 const PREVIEW_CHARS = 8000;
 
 export async function GET(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
   const { id } = await context.params;
@@ -18,6 +18,20 @@ export async function GET(
       return jsonError(404, "NOT_FOUND", "CV not found");
     }
     const extracted = await readCvExtractedText(id);
+    const url = new URL(request.url);
+    const fullExtracted =
+      url.searchParams.get("fullExtracted") === "1" ||
+      url.searchParams.get("fullExtracted") === "true";
+    if (fullExtracted) {
+      return jsonOk({
+        item: meta,
+        extracted: extracted ?? "",
+        extractedPreview:
+          extracted && extracted.length > PREVIEW_CHARS
+            ? `${extracted.slice(0, PREVIEW_CHARS)}…`
+            : extracted ?? "",
+      });
+    }
     const extractedPreview =
       extracted && extracted.length > PREVIEW_CHARS
         ? `${extracted.slice(0, PREVIEW_CHARS)}…`

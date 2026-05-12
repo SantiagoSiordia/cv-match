@@ -280,19 +280,30 @@ export function CvsClient() {
     }
   }
 
-  async function onDelete(id: string) {
-    if (!confirm("Delete this CV?")) return;
+  async function onDelete(id: string): Promise<boolean> {
+    if (!confirm("Delete this CV?")) return false;
     setError(null);
     try {
       const res = await fetch(`/api/cvs/${id}`, { method: "DELETE" });
       const json = (await res.json()) as { ok: true } | ApiErrorBody;
       if (!json.ok) {
         setError(json.error.message);
-        return;
+        return false;
       }
       await load();
+      return true;
     } catch {
       setError("Delete failed");
+      return false;
+    }
+  }
+
+  async function deleteFromPreviewModal() {
+    if (!previewId) return;
+    const ok = await onDelete(previewId);
+    if (ok) {
+      setPreviewId(null);
+      setPreviewText(null);
     }
   }
 
@@ -545,104 +556,67 @@ export function CvsClient() {
                 </p>
               </div>
             ) : (
-              <ul className="grid grid-cols-1 gap-3 pb-1 lg:grid-cols-2">
+              <ul className="grid grid-cols-1 gap-2 pb-1 lg:grid-cols-2">
                 {filteredItems.map((cv) => {
                   const displayName =
                     cv.extracted?.name?.trim() ||
                     cv.originalName.replace(/\.[^.]+$/, "").trim() ||
                     cv.originalName;
+                  const metaLine =
+                    cv.extracted &&
+                    [
+                      cv.extracted.location?.trim(),
+                      cv.extracted.currentPosition?.trim(),
+                      cv.extracted.hardSkills?.length
+                        ? cv.extracted.hardSkills.slice(0, 6).join(", ")
+                        : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" · ");
                   return (
                   <li
                     key={cv.id}
-                    className="rounded-xl border border-zinc-200/90 bg-white p-4 shadow-sm transition-shadow hover:shadow-md dark:border-zinc-800 dark:bg-zinc-950/80 dark:hover:border-zinc-700"
+                    className="overflow-hidden rounded-xl border border-zinc-200/90 bg-white shadow-sm transition-shadow hover:shadow-md dark:border-zinc-800 dark:bg-zinc-950/80 dark:hover:border-zinc-700"
                   >
-                    <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={() => void openPreview(cv.id)}
+                      className="flex w-full items-start gap-2.5 p-2.5 text-left transition-colors hover:bg-zinc-50/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-500 dark:hover:bg-zinc-900/50"
+                      aria-label={`Open extracted text preview for ${displayName}`}
+                    >
                       <div
-                        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-zinc-200 to-zinc-100 text-[0.7rem] font-bold tracking-tight text-zinc-700 dark:from-zinc-800 dark:to-zinc-900 dark:text-zinc-300"
+                        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-zinc-200 to-zinc-100 text-[0.65rem] font-bold leading-none tracking-tight text-zinc-700 dark:from-zinc-800 dark:to-zinc-900 dark:text-zinc-300"
                         aria-hidden
                       >
                         {initialsFromDisplayName(displayName)}
                       </div>
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+                        <p className="truncate text-sm font-semibold leading-tight text-zinc-900 dark:text-zinc-50">
                           {displayName}
                         </p>
-                        <p className="mt-0.5 truncate text-[0.7rem] tabular-nums text-zinc-500 dark:text-zinc-500">
+                        <p className="mt-0.5 truncate text-[11px] tabular-nums text-zinc-500 dark:text-zinc-500">
                           {formatUploadDate(cv.uploadedAt)}
                         </p>
-                        {cv.extracted ? (
-                          <dl className="mt-2 space-y-1 text-xs text-zinc-600 dark:text-zinc-400">
-                            <div className="flex gap-1.5">
-                              <dt className="shrink-0 font-medium text-zinc-500 dark:text-zinc-500">
-                                Location
-                              </dt>
-                              <dd className="min-w-0 truncate">
-                                {cv.extracted.location?.trim() || "—"}
-                              </dd>
-                            </div>
-                            <div className="flex gap-1.5">
-                              <dt className="shrink-0 font-medium text-zinc-500 dark:text-zinc-500">
-                                Position
-                              </dt>
-                              <dd className="min-w-0 truncate">
-                                {cv.extracted.currentPosition?.trim() || "—"}
-                              </dd>
-                            </div>
-                            <div className="flex gap-1.5">
-                              <dt className="shrink-0 font-medium text-zinc-500 dark:text-zinc-500">
-                                Skills
-                              </dt>
-                              <dd
-                                className="min-w-0 truncate"
-                                title={
-                                  cv.extracted.hardSkills?.length
-                                    ? cv.extracted.hardSkills.join(", ")
-                                    : undefined
-                                }
-                              >
-                                {cv.extracted.hardSkills?.length
-                                  ? cv.extracted.hardSkills.join(", ")
-                                  : "—"}
-                              </dd>
-                            </div>
-                          </dl>
+                        {metaLine ? (
+                          <p
+                            className="mt-1 line-clamp-2 text-[11px] leading-snug text-zinc-600 dark:text-zinc-400"
+                            title={metaLine}
+                          >
+                            {metaLine}
+                          </p>
                         ) : null}
                         {cv.lowTextWarning ? (
-                          <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
-                            Low text extracted
+                          <p className="mt-1 text-[11px] text-amber-700 dark:text-amber-300">
+                            Low text
                           </p>
                         ) : null}
                         {cv.extractedError ? (
-                          <p className="mt-1 text-xs text-red-700 dark:text-red-300">
+                          <p className="mt-1 line-clamp-2 text-[11px] text-red-700 dark:text-red-300">
                             AI: {cv.extractedError}
                           </p>
                         ) : null}
                       </div>
-                    </div>
-                    <div className="mt-4 flex flex-wrap gap-2 border-t border-zinc-100 pt-4 dark:border-zinc-800/80">
-                      <button
-                        type="button"
-                        onClick={() => void openPreview(cv.id)}
-                        className="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900"
-                      >
-                        Extracted text
-                      </button>
-                      <a
-                        href={`/api/cvs/${cv.id}/file`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900"
-                      >
-                        Open PDF
-                      </a>
-                      <button
-                        type="button"
-                        onClick={() => void onDelete(cv.id)}
-                        className="rounded-lg border border-red-200/90 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 dark:border-red-900/60 dark:bg-red-950/20 dark:text-red-300 dark:hover:bg-red-950/40"
-                      >
-                        Delete
-                      </button>
-                    </div>
+                    </button>
                   </li>
                   );
                 })}
@@ -660,6 +634,27 @@ export function CvsClient() {
           setPreviewId(null);
           setPreviewText(null);
         }}
+        footer={
+          previewId ? (
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <a
+                href={`/api/cvs/${previewId}/file`}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center justify-center rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-800 shadow-sm transition-colors hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
+              >
+                Open PDF
+              </a>
+              <button
+                type="button"
+                onClick={() => void deleteFromPreviewModal()}
+                className="inline-flex items-center justify-center rounded-lg border border-red-200/90 bg-white px-3 py-1.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-50 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300 dark:hover:bg-red-950/50"
+              >
+                Delete
+              </button>
+            </div>
+          ) : null
+        }
       >
         {previewText === null ? (
           <p className="text-sm text-zinc-500">Loading preview…</p>

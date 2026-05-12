@@ -34,6 +34,17 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
 RUN mkdir -p /data && chown nextjs:nodejs /data
 
+USER root
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3-venv \
+  && python3 -m venv /opt/md2pdf-venv \
+  && /opt/md2pdf-venv/bin/pip install --no-cache-dir "md2pdf-mermaid>=1.4.0" \
+  && /opt/md2pdf-venv/bin/playwright install chromium \
+  && chown -R nextjs:nodejs /opt/md2pdf-venv \
+  && rm -rf /var/lib/apt/lists/*
+
+ENV PATH="/opt/md2pdf-venv/bin:$PATH"
+
 USER nextjs
 EXPOSE 3000
 CMD ["node", "server.js"]

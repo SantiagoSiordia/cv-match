@@ -1,3 +1,4 @@
+import type { CvMatchRow } from "@/lib/embeddings";
 import type { CvStoredMeta, EvaluationRun, JobStoredMeta } from "@/lib/schemas";
 
 /** NDJSON lines from `POST /api/evaluate/stream`. */
@@ -21,4 +22,25 @@ export type ApiEvaluationRun = { run: EvaluationRun };
 export type ApiErrorBody = {
   ok: false;
   error: { code: string; message: string };
+};
+
+export type ApiEmbeddingRankMatchRow = CvMatchRow & {
+  technicalBucket?: "technical" | "non_technical" | "unknown";
+  cvBodyTruncatedForEmbed?: boolean;
+  cvDocumentTitleLine?: string;
+};
+
+export type ApiJobEmbeddingRank = {
+  jobDescriptionId: string;
+  jobTitle: string;
+  matches: ApiEmbeddingRankMatchRow[];
+  meta: {
+    embeddingModelId: string;
+    embeddingIndexModelKey: string;
+    embeddingIndexUpdatedAt: string | null;
+    embeddingIndexEntryCount: number;
+    maxEmbeddingChars: number;
+    jobQueryInputTruncated: boolean;
+  };
+  jobRequiresTechnicalOrdering: boolean;
 };
