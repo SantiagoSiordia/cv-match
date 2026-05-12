@@ -37,7 +37,7 @@ export async function POST(request: Request) {
   } = parsed.data;
 
   try {
-    const matrix = await buildJobCvMatrix();
+    const matrix = await buildJobCvMatrix({ ensureEmbeddings: true });
     const runs: Array<{ jobDescriptionId: string; runId: string }> = [];
     const skipped: Array<{ jobDescriptionId: string; reason: string }> = [];
 

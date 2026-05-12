@@ -134,6 +134,14 @@ function embedConcurrency(): number {
   return Math.min(16, n);
 }
 
+function envInt(name: string, fallback: number, min: number, max: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return Math.min(max, Math.max(min, fallback));
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n)) return Math.min(max, Math.max(min, fallback));
+  return Math.min(max, Math.max(min, n));
+}
+
 async function invokeTitanEmbedding(inputText: string): Promise<number[]> {
   let client;
   try {
@@ -474,6 +482,159 @@ export async function ensureCvEmbeddingIndex(): Promise<CvIndexFile> {
   return index;
 }
 
+/**
+ * Embeds up to `maxJobs` roles that have JD text but **no** vectors in the job index
+ * (neither document nor query). Bounded so `/api/analytics/overview` can populate
+ * cold indexes without running a full `ensureJobEmbeddingIndex()` pass.
+ */
+export async function warmAnalyticsJobEmbeddings(maxJobs?: number): Promise<void> {
+  const cap = maxJobs ?? envInt("ANALYTICS_WARM_JOB_EMBEDDINGS", 48, 0, 500);
+  if (cap <= 0) return;
+
+  let jobIndex = await loadJobIndex();
+  const jobs = await listJobDescriptions();
+  const need: Array<{
+    id: string;
+    text: string;
+    title: string;
+    fp: string;
+  }> = [];
+
+  for (const job of jobs) {
+    if (need.length >= cap) break;
+    const text = (await readJobExtractedText(job.id)) ?? "";
+    if (!text.trim()) continue;
+    const fp = fingerprintText(text);
+    const ent = jobIndex.entries[job.id];
+    const hasAny =
+      (ent?.queryValues?.length ?? 0) > 0 || (ent?.values?.length ?? 0) > 0;
+    if (hasAny) continue;
+    const title =
+      job.titleGuess?.trim() ||
+      job.originalName.replace(/\.[^.]+$/, "") ||
+      "Job";
+    need.push({ id: job.id, text, title, fp });
+  }
+
+  if (need.length === 0) return;
+
+  const batchSize = 40;
+  for (let i = 0; i < need.length; i += batchSize) {
+    const chunk = need.slice(i, i + batchSize);
+    const docVectors = await batchEmbedContents(
+      chunk.map((c) => ({
+        text: c.text,
+        taskType: "RETRIEVAL_DOCUMENT" as const,
+        title: c.title,
+      })),
+    );
+    const key = indexKeyForVector(docVectors[0]!);
+    if (jobIndex.model !== key && Object.keys(jobIndex.entries).length > 0) {
+      return;
+    }
+    if (jobIndex.model !== key) {
+      jobIndex = { model: key, entries: {} };
+    }
+    const queryVectors = await batchEmbedContents(
+      chunk.map((c) => ({
+        text: c.text,
+        taskType: "RETRIEVAL_QUERY" as const,
+      })),
+    );
+    for (let j = 0; j < chunk.length; j++) {
+      const c = chunk[j]!;
+      jobIndex.entries[c.id] = {
+        fingerprint: c.fp,
+        values: docVectors[j]!,
+        queryFingerprint: c.fp,
+        queryValues: queryVectors[j]!,
+      };
+    }
+  }
+
+  await saveJobIndex(jobIndex);
+}
+
+/**
+ * Embeds up to `maxCvs` résumés that are missing a usable document vector in the CV
+ * index. Skips `ensureJobEmbeddingIndex()`; aligns CV index model with the existing
+ * job index when the latter is non-empty.
+ */
+export async function warmAnalyticsCvEmbeddings(maxCvs?: number): Promise<void> {
+  const cap = maxCvs ?? envInt("ANALYTICS_WARM_CV_EMBEDDINGS", 192, 0, 2_000);
+  if (cap <= 0) return;
+
+  const jobIndex = await loadJobIndex();
+  const cvs = await listCvs();
+  let index = await loadCvIndex();
+
+  if (
+    Object.keys(jobIndex.entries).length > 0 &&
+    index.model !== jobIndex.model
+  ) {
+    index = { model: jobIndex.model, entries: {} };
+  }
+
+  const toEmbed: Array<{
+    id: string;
+    text: string;
+    title: string;
+    fingerprint: string;
+  }> = [];
+
+  for (const cv of cvs) {
+    if (toEmbed.length >= cap) break;
+    const text = (await readCvExtractedText(cv.id)) ?? "";
+    if (!text.trim()) continue;
+    const fp = fingerprintText(text);
+    const existing = index.entries[cv.id];
+    if (existing && existing.fingerprint === fp && existing.values.length > 0) {
+      continue;
+    }
+    toEmbed.push({
+      id: cv.id,
+      text,
+      title: cvTitleLineForEmbedding(cv),
+      fingerprint: fp,
+    });
+  }
+
+  if (toEmbed.length === 0) return;
+
+  const batchSize = 100;
+  for (let i = 0; i < toEmbed.length; i += batchSize) {
+    const chunk = toEmbed.slice(i, i + batchSize);
+    const vectors = await batchEmbedContents(
+      chunk.map((c) => ({
+        text: c.text,
+        taskType: "RETRIEVAL_DOCUMENT" as const,
+        title: c.title,
+      })),
+    );
+    const key = indexKeyForVector(vectors[0]!);
+    if (index.model !== key && Object.keys(index.entries).length > 0) {
+      return;
+    }
+    if (index.model !== key) {
+      index = { model: key, entries: {} };
+    }
+    for (let j = 0; j < chunk.length; j++) {
+      const c = chunk[j]!;
+      index.entries[c.id] = {
+        fingerprint: c.fingerprint,
+        values: vectors[j]!,
+      };
+    }
+  }
+
+  const cvIds = new Set(cvs.map((c) => c.id));
+  for (const id of Object.keys(index.entries)) {
+    if (!cvIds.has(id)) delete index.entries[id];
+  }
+
+  await saveCvIndex(index);
+}
+
 export type CvMatchRow = {
   cvId: string;
   cvOriginalName: string;
@@ -600,13 +761,35 @@ export type JobCvMatrixRow = {
   matches: CvMatchRow[];
 };
 
+export type BuildJobCvMatrixOptions = {
+  /**
+   * When `true`, runs `ensureCvEmbeddingIndex()` (can embed every CV/job) and calls
+   * Bedrock for any job still missing a cached `RETRIEVAL_QUERY` vector. Use for
+   * bulk LLM evaluate / explicit index rebuild flows.
+   *
+ * When `false` (default), reads on-disk indices only. Uses a cached job
+ * `RETRIEVAL_QUERY` vector when its fingerprint matches the current JD text, or
+ * when `queryFingerprint` is absent (legacy indexes). Then uses the job document
+ * vector when its text fingerprint matches. If fingerprints disagree (edited JD),
+ * still uses the best available cached vector so the dashboard stays useful
+ * (scores may be slightly stale). Only omits a vector when the index has nothing
+ * for that job — then matches are skipped without calling Bedrock.
+   */
+  ensureEmbeddings?: boolean;
+};
+
 /**
  * Full job × CV embedding ranks in one pass.
- * Uses cached per-job RETRIEVAL_QUERY vectors from the job index when possible
- * so analytics does not re-embed every job on every request.
+ * Uses cached per-job `RETRIEVAL_QUERY` vectors when present; see
+ * {@link BuildJobCvMatrixOptions.ensureEmbeddings}.
  */
-export async function buildJobCvMatrix(): Promise<JobCvMatrixRow[]> {
-  const cvIndex = await ensureCvEmbeddingIndex();
+export async function buildJobCvMatrix(
+  options?: BuildJobCvMatrixOptions,
+): Promise<JobCvMatrixRow[]> {
+  const ensure = options?.ensureEmbeddings === true;
+  const cvIndex = ensure
+    ? await ensureCvEmbeddingIndex()
+    : await loadCvIndex();
   const jobIndex = await loadJobIndex();
   const jobs = await listJobDescriptions();
   const cvs = await listCvs();
@@ -625,23 +808,35 @@ export async function buildJobCvMatrix(): Promise<JobCvMatrixRow[]> {
     return [];
   }
 
-  const queryVectors: number[][] = new Array(withText.length);
+  const queryVectors: (number[] | undefined)[] = new Array(withText.length);
   const missingQuery: Array<{ i: number; id: string; text: string }> = [];
   for (let i = 0; i < withText.length; i++) {
     const w = withText[i]!;
     const fp = fingerprintText(w.text);
     const ent = jobIndex.entries[w.job.id];
+
     if (
       ent?.queryValues?.length &&
-      ent.queryFingerprint === fp
+      (ent.queryFingerprint == null ||
+        ent.queryFingerprint === "" ||
+        ent.queryFingerprint === fp)
     ) {
       queryVectors[i] = ent.queryValues;
-    } else {
+    } else if (ent?.values?.length && ent.fingerprint === fp) {
+      queryVectors[i] = ent.values;
+    } else if (ensure) {
       missingQuery.push({ i, id: w.job.id, text: w.text });
+    } else if (ent?.queryValues?.length) {
+      // Cached path: prefer a possibly-stale query vector over no scores at all.
+      queryVectors[i] = ent.queryValues;
+    } else if (ent?.values?.length) {
+      queryVectors[i] = ent.values;
+    } else {
+      queryVectors[i] = undefined;
     }
   }
 
-  if (missingQuery.length > 0) {
+  if (ensure && missingQuery.length > 0) {
     const newVecs = await batchEmbedContents(
       missingQuery.map((m) => ({
         text: m.text,
@@ -676,13 +871,55 @@ export async function buildJobCvMatrix(): Promise<JobCvMatrixRow[]> {
 
   for (let i = 0; i < withText.length; i++) {
     const { job } = withText[i]!;
-    const jobVec = queryVectors[i]!;
+    const jobVec = queryVectors[i];
     const title =
       job.titleGuess?.trim() ||
       job.originalName.replace(/\.[^.]+$/, "") ||
       "Job";
 
     const matches: CvMatchRow[] = [];
+
+    if (!jobVec?.length) {
+      for (const { meta: cv, text: cvText } of cvList) {
+        if (!cvText.trim()) {
+          matches.push({
+            cvId: cv.id,
+            cvOriginalName: cv.originalName,
+            scorePercent: 0,
+            cosineSimilarity: 0,
+            skipped: true,
+            skipReason: "no_extracted_text",
+          });
+        } else {
+          matches.push({
+            cvId: cv.id,
+            cvOriginalName: cv.originalName,
+            scorePercent: 0,
+            cosineSimilarity: 0,
+            skipped: true,
+            skipReason: "job_query_embedding_unavailable",
+          });
+        }
+      }
+      matches.sort(compareCvMatchRowsForRanking);
+      const cvById = new Map(cvs.map((c) => [c.id, c]));
+      const cvTextById = new Map(cvList.map(({ meta, text }) => [meta.id, text]));
+      const ordered = applyTechnicalJobMatchOrdering(
+        job,
+        title,
+        matches,
+        cvById,
+        compareCvMatchRowsForRanking,
+        cvTextById,
+      );
+      out.push({
+        jobDescriptionId: job.id,
+        jobTitle: title,
+        matches: ordered,
+      });
+      continue;
+    }
+
     for (const { meta: cv, text: cvText } of cvList) {
       if (!cvText.trim()) {
         matches.push({

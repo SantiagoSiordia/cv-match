@@ -61,7 +61,7 @@ export async function POST(request: Request) {
           process.env.EVALUATE_LOG_TIMING?.trim() === "1"
             ? Date.now()
             : 0;
-        const matrix = await buildJobCvMatrix();
+        const matrix = await buildJobCvMatrix({ ensureEmbeddings: true });
         if (tMatrix0) {
           console.log(
             JSON.stringify({

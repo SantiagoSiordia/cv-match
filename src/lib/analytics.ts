@@ -2,6 +2,8 @@ import type { CvStoredMeta, EvaluationRun, JobStoredMeta } from "@/lib/schemas";
 import {
   buildJobCvMatrix,
   readCvEmbeddingIndexSnapshot,
+  warmAnalyticsCvEmbeddings,
+  warmAnalyticsJobEmbeddings,
   type JobCvMatrixRow,
 } from "@/lib/embeddings";
 import {
@@ -235,6 +237,13 @@ export async function computeAnalyticsOverview(input: {
   thresholdEmbeddingPercent: number;
   thresholdLlmOverall: number;
 }): Promise<AnalyticsOverview> {
+  // `buildJobCvMatrix({ ensureEmbeddings: false })` reads the on-disk CV index only.
+  // If that index is empty or stale, every match is skipped and the UI shows "—".
+  // Warm a bounded batch of embeddings here so the dashboard fills in progressively
+  // without running a full `ensureCvEmbeddingIndex()` (which blocks on every CV).
+  await warmAnalyticsJobEmbeddings();
+  await warmAnalyticsCvEmbeddings();
+
   const [cvs, jobs, runs, matrix, cvSnap] = await Promise.all([
     listCvs(),
     listJobDescriptions(),

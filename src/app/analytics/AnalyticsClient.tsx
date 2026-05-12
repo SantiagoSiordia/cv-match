@@ -156,7 +156,11 @@ function StatCardSkeleton() {
 
 function JobsTableSkeleton() {
   return (
-    <div className="mt-3 overflow-hidden rounded-2xl border border-zinc-200/90 bg-white shadow-[0_2px_8px_-2px_rgba(15,23,42,0.06)] dark:border-zinc-800 dark:bg-zinc-950 dark:shadow-[0_2px_12px_-4px_rgba(0,0,0,0.35)]">
+    <div
+      className="mt-3 overflow-hidden rounded-2xl border border-zinc-200/90 bg-white shadow-[0_2px_8px_-2px_rgba(15,23,42,0.06)] dark:border-zinc-800 dark:bg-zinc-950 dark:shadow-[0_2px_12px_-4px_rgba(0,0,0,0.35)]"
+      aria-busy="true"
+      aria-label="Loading roles table"
+    >
       <div className="flex animate-pulse flex-nowrap items-center gap-3 border-b border-zinc-100 bg-gradient-to-b from-zinc-50/90 to-white px-5 py-4 dark:border-zinc-800 dark:from-zinc-900/40 dark:to-zinc-950">
         <div className="h-5 w-52 shrink-0 rounded-md bg-zinc-200 dark:bg-zinc-700" />
         <div className="h-9 min-w-0 flex-1 rounded-xl bg-zinc-200 dark:bg-zinc-700" />
@@ -221,29 +225,6 @@ function JobsTableSkeleton() {
   );
 }
 
-/**
- * Renders a stable placeholder on the server and on the client’s first paint, then
- * swaps in the detailed skeleton after mount so SSR and hydration always match.
- */
-function JobsTableSkeletonGate() {
-  const [showDetail, setShowDetail] = useState(false);
-  useEffect(() => {
-    setShowDetail(true);
-  }, []);
-  if (!showDetail) {
-    return (
-      <div
-        className="mt-3 overflow-hidden rounded-2xl border border-zinc-200/90 bg-white shadow-[0_2px_8px_-2px_rgba(15,23,42,0.06)] dark:border-zinc-800 dark:bg-zinc-950 dark:shadow-[0_2px_12px_-4px_rgba(0,0,0,0.35)]"
-        aria-busy="true"
-        aria-label="Loading roles table"
-      >
-        <div className="h-[min(70vh,36rem)] min-h-[12rem] animate-pulse bg-gradient-to-b from-zinc-50 to-zinc-100 dark:from-zinc-900/40 dark:to-zinc-950" />
-      </div>
-    );
-  }
-  return <JobsTableSkeleton />;
-}
-
 function TrainingTableSkeleton() {
   return (
     <div className="mt-3 overflow-x-auto rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
@@ -306,12 +287,15 @@ export function AnalyticsClient() {
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
 
   const loadAbortRef = useRef<AbortController | null>(null);
+  /** Bumps on unmount / overlapping loads so stale fetches never own `setLoading(false)`. */
+  const loadEpochRef = useRef(0);
   const exportMenuRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
     loadAbortRef.current?.abort();
     const ac = new AbortController();
     loadAbortRef.current = ac;
+    const epoch = ++loadEpochRef.current;
 
     setLoading(true);
     setError(null);
@@ -324,11 +308,11 @@ export function AnalyticsClient() {
         cache: "no-store",
         signal: ac.signal,
       });
-      if (loadAbortRef.current !== ac) return;
+      if (epoch !== loadEpochRef.current) return;
       const json = (await res.json()) as
         | { ok: true; data: { overview: AnalyticsOverview } }
         | ApiErrorBody;
-      if (loadAbortRef.current !== ac) return;
+      if (epoch !== loadEpochRef.current) return;
       if (!json.ok) {
         setError(json.error.message);
         setOverview(null);
@@ -342,12 +326,12 @@ export function AnalyticsClient() {
       }
       setOverview(ov);
     } catch (e) {
-      if (loadAbortRef.current !== ac) return;
+      if (epoch !== loadEpochRef.current) return;
       if (e instanceof Error && e.name === "AbortError") return;
       setError("Could not load analytics");
       setOverview(null);
     } finally {
-      if (loadAbortRef.current === ac) {
+      if (epoch === loadEpochRef.current) {
         setLoading(false);
       }
     }
@@ -357,7 +341,7 @@ export function AnalyticsClient() {
     void load();
     return () => {
       loadAbortRef.current?.abort();
-      loadAbortRef.current = null;
+      loadEpochRef.current++;
     };
   }, [load]);
 
@@ -516,7 +500,7 @@ export function AnalyticsClient() {
           </div>
           <div className="mt-2 h-4 w-full max-w-xl animate-pulse rounded bg-zinc-100 dark:bg-zinc-800" />
           <section className="mt-10">
-            <JobsTableSkeletonGate />
+            <JobsTableSkeleton />
           </section>
           <section className="mt-10">
             <div className="h-6 w-64 animate-pulse rounded bg-zinc-200 dark:bg-zinc-700" />
